@@ -132,16 +132,15 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 
 ## Questions ouvertes
 
-- Voix retenue (choix en V0).
+- ~~Voix retenue (choix en V0).~~ Réglé : **George** (britannique, homme, `JBFqnCBsobJjWmhhKeHm`).
 - Prénoms et caractère détaillé de chaque personnalité.
 - Plafond de dépense quotidien.
 - Heure du rappel quotidien.
 
 ## État du projet
 
-- **V0 construite, en attente de validation par Cherif.** Branche `claude/peaceful-feynman-txssvf`.
+- **V0 validée par Cherif (24 oct. 2026)**, fusionnée dans `main`. Il discute avec les 3 voix sur son téléphone ; délai moyen sous 2 s ; l'interruption marche à chaque fois. Voix retenue : **George**.
   - Next.js 16 (App Router, Tailwind v4, PWA installable), SDK `@elevenlabs/react`.
-  - Page unique `src/components/voice-test.tsx` : 3 voix (`src/config/voices.ts`), bouton Parler, orbe qui réagit à la voix, délai de réponse (dernier / moyen / meilleur), texte de la conversation, choix WebRTC / WebSocket, étoile « ma préférée ».
-  - Route serveur `src/app/api/elevenlabs/session/route.ts` : jeton WebRTC ou URL signée, clé API uniquement côté serveur, voix imposée par override TTS (à activer dans l'agent ElevenLabs → Security).
-  - Variables : `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` (voir `.env.example`). Mise en route pas à pas dans `README.md`.
-- Prochaine étape : Cherif teste sur téléphone, choisit la voix et confirme le délai. Ensuite : maquette des écrans V1, puis V1.
+  - Page `src/components/voice-test.tsx`, voix dans `src/config/voices.ts`, route serveur `src/app/api/elevenlabs/session/route.ts` (clé API uniquement côté serveur, voix imposée par override TTS).
+  - Variables : `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` (voir `.env.example`). Mise en route dans `README.md`.
+- **V1 en préparation** : maquette des écrans (accueil, conversation, fin de séance) à faire valider par Cherif avant d'écrire le code.
