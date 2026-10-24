@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentStatus } from "@/app/api/elevenlabs/agent/route";
 
 /**
@@ -17,24 +17,26 @@ export function Settings() {
   const [done, setDone] = useState(false);
   const [bilanAvailable, setBilanAvailable] = useState<boolean | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [agentRes, bilanRes] = await Promise.all([fetch("/api/elevenlabs/agent"), fetch("/api/bilan")]);
-      const agentData = (await agentRes.json().catch(() => ({}))) as AgentStatus & { error?: string };
-      setAgent(agentRes.ok ? { status: agentData, error: null } : { status: null, error: agentData.error ?? "Erreur." });
-      const bilanData = (await bilanRes.json().catch(() => ({}))) as { available?: boolean };
-      setBilanAvailable(Boolean(bilanData.available));
-    } catch {
-      setAgent({ status: null, error: "Pas de connexion. Vérifie ton réseau puis réessaie." });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    Promise.all([fetch("/api/elevenlabs/agent"), fetch("/api/bilan")])
+      .then(async ([agentRes, bilanRes]) => {
+        const agentData = (await agentRes.json().catch(() => ({}))) as AgentStatus & { error?: string };
+        const bilanData = (await bilanRes.json().catch(() => ({}))) as { available?: boolean };
+        if (!active) return;
+        setAgent(agentRes.ok ? { status: agentData, error: null } : { status: null, error: agentData.error ?? "Erreur." });
+        setBilanAvailable(Boolean(bilanData.available));
+      })
+      .catch(() => {
+        if (active) setAgent({ status: null, error: "Pas de connexion. Vérifie ton réseau puis réessaie." });
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const apply = async () => {
     setApplying(true);

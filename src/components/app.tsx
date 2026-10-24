@@ -79,6 +79,14 @@ function AppInner() {
   const userTurns = useRef(0);
   const pendingCommand = useRef<string | null>(null);
   const restarting = useRef(false);
+  const everConnected = useRef(false);
+  const attemptType = useRef<ConnectionType>("webrtc");
+  const fallbackTried = useRef(false);
+  const lastContext = useRef<{ resumeMessage: string } | undefined>(undefined);
+  const agentReady = useRef(false);
+  const startRef = useRef<(context?: { resumeMessage: string }, force?: ConnectionType) => Promise<boolean>>(
+    async () => false,
+  );
   const ending = useRef(false);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const orbRef = useRef<HTMLDivElement>(null);
@@ -95,6 +103,7 @@ function AppInner() {
   const conversation = useConversation({
     micMuted: !holding,
     onConnect: () => {
+      everConnected.current = true;
       setError(null);
       setNotice(null);
       if (!restarting.current) {
@@ -117,6 +126,15 @@ function AppInner() {
       }
       if (ending.current || restarting.current) return;
       if (details.reason === "error") {
+        // WebRTC coupé avant même d'être connecté : on retente une fois en
+        // WebSocket, plus robuste sur certains réseaux mobiles et plus
+        // explicite sur les erreurs de réglage de l'agent.
+        if (!everConnected.current && attemptType.current === "webrtc" && !fallbackTried.current) {
+          fallbackTried.current = true;
+          setNotice("La connexion audio a été coupée. Nouvel essai avec une autre méthode…");
+          void startRef.current(lastContext.current, "websocket");
+          return;
+        }
         setError(humanizeError(details.message));
       } else {
         setNotice("La discussion s'est coupée. Tu peux reprendre là où vous en étiez, ou terminer.");
@@ -180,10 +198,40 @@ function AppInner() {
     if (box) box.scrollTop = box.scrollHeight;
   }, [transcript, showText]);
 
+  // Vérifie que l'agent ElevenLabs accepte nos consignes ; sinon le règle
+  // automatiquement (même chose que le bouton de la page Réglages).
+  const ensureAgentConfigured = useCallback(async () => {
+    if (agentReady.current) return true;
+    try {
+      const res = await fetch("/api/elevenlabs/agent");
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok) return true; // la route session donnera un message plus précis
+      if (data.ok) {
+        agentReady.current = true;
+        return true;
+      }
+      const fix = await fetch("/api/elevenlabs/agent", { method: "POST" });
+      const fixed = (await fix.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (fix.ok && fixed.ok) {
+        agentReady.current = true;
+        return true;
+      }
+      setError(
+        `L'agent ElevenLabs n'accepte pas encore les réglages de l'app. ${fixed.error ?? ""} Ouvre Réglages pour voir ce qui manque.`.trim(),
+      );
+      return false;
+    } catch {
+      return true;
+    }
+  }, []);
+
   const start = useCallback(
-    async (context?: { resumeMessage: string }) => {
+    async (context?: { resumeMessage: string }, force?: ConnectionType) => {
       setError(null);
-      setNotice(null);
+      if (!force) {
+        setNotice(null);
+        fallbackTried.current = false;
+      }
       setPreparing(true);
       try {
         try {
@@ -193,13 +241,18 @@ function AppInner() {
           setError("Le micro est refusé. Autorise le micro pour ce site dans les réglages du navigateur, puis réessaie.");
           return false;
         }
+        if (!(await ensureAgentConfigured())) return false;
+        const type = force ?? connectionType;
+        attemptType.current = type;
+        everConnected.current = false;
+        lastContext.current = context;
         const res = await fetch("/api/elevenlabs/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             personality: personality.id,
             speed,
-            connectionType,
+            connectionType: type,
             context: context
               ? {
                   resumeMessage: context.resumeMessage,
@@ -237,8 +290,12 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [speed, connectionType, startSession],
+    [speed, connectionType, startSession, ensureAgentConfigured],
   );
+
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
 
   const begin = useCallback(async () => {
     setPhase("live");
@@ -275,6 +332,9 @@ function AppInner() {
   const startWithSpeed = useCallback(
     async (nextSpeed: SpeedKey, resumeMessage: string) => {
       setPreparing(true);
+      attemptType.current = connectionType;
+      everConnected.current = false;
+      lastContext.current = { resumeMessage };
       try {
         const res = await fetch("/api/elevenlabs/session", {
           method: "POST",
@@ -469,9 +529,14 @@ function AppInner() {
         {error && (
           <div className="flex flex-col items-center gap-3">
             <p className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</p>
-            <button type="button" onClick={() => start()} className="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-contrast">
-              Réessayer
-            </button>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => start()} className="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-contrast">
+                Réessayer
+              </button>
+              <Link href="/reglages" className="h-11 rounded-xl border border-line bg-elevated px-5 text-sm font-semibold leading-[44px]">
+                Réglages
+              </Link>
+            </div>
           </div>
         )}
         {notice && !error && (
@@ -772,6 +837,9 @@ function humanizeError(message: string) {
   }
   if (m.includes("override")) {
     return "ElevenLabs refuse une consigne. Dans l'agent → Security → Overrides, active System prompt, First message, Voice ID et Speed.";
+  }
+  if (m.includes("livekit") || m.includes("disconnected") || m.includes("closed")) {
+    return "ElevenLabs a coupé la connexion. Le plus souvent, l'agent n'accepte pas encore les réglages de l'app : ouvre Réglages et vérifie qu'il est « Prêt ». Sinon, réessaie dans un instant.";
   }
   if (m.includes("network") || m.includes("failed to fetch") || m.includes("timeout")) {
     return "La connexion est trop faible. Rapproche-toi du réseau et réessaie.";
