@@ -145,5 +145,5 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
   - Config : `src/config/personalities.ts` (Max, consignes en anglais), `src/config/speeds.ts`, `src/config/voices.ts`.
   - Serveur : `src/app/api/elevenlabs/session/route.ts` renvoie le jeton et les overrides (prompt, first message, voix, vitesse) ; `src/app/api/bilan/route.ts` appelle Claude (`ANTHROPIC_MODEL`, défaut `claude-haiku-5-5`).
   - Progression (série, minutes du jour) en localStorage jusqu'à la V3.
-  - Côté ElevenLabs, l'agent doit autoriser les overrides System prompt, First message, Voice ID, Speed ; LLM choisi dans le dashboard (Claude Haiku).
+  - Page `/reglages` : bouton qui configure l'agent ElevenLabs par l'API (overrides System prompt, First message, Voice ID, Speed ; LLM `claude-haiku-5-5`, variable `ELEVENLABS_AGENT_LLM`). Le projet Vercel de Cherif n'est pas accessible depuis la session Claude (autre compte).
 - Prochaine étape : Cherif teste 10 minutes sans bug sur téléphone. Ensuite V2.

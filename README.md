@@ -21,16 +21,11 @@ La page de test des voix de la V0 reste accessible en bas de l'accueil (lien « 
 
 ### 1. L'agent ElevenLabs
 
-Si tu as déjà l'agent de la V0, garde-le. Sinon : [elevenlabs.io](https://elevenlabs.io) → **Agents** → **Create agent** → **Blank agent**, langue **English**.
+Si tu as déjà l'agent de la V0, garde-le. Sinon : [elevenlabs.io](https://elevenlabs.io) → **Agents** → **Create agent** → **Blank agent**, langue **English**, puis copie l'**Agent ID** (commence par `agent_`).
 
-Important pour la V1 : les consignes de Max, sa première phrase, sa voix et sa vitesse sont envoyées par l'app au début de chaque séance. Il faut donc autoriser l'agent à les recevoir :
+Les consignes de Max, sa première phrase, sa voix et sa vitesse sont envoyées par l'app au début de chaque séance. L'agent doit l'autoriser, et il faut lui choisir Claude Haiku comme cerveau. **Pas besoin de cliquer dans le dashboard** : une fois l'app déployée, ouvre la page **Réglages** (lien en bas de l'accueil, ou `/reglages`) et appuie sur **Configurer l'agent automatiquement**. La page montre ensuite ce qui est prêt.
 
-1. Ouvre l'agent → onglet **Security** (ou **Advanced** → **Overrides**).
-2. Active les overrides **System prompt**, **First message**, **Voice ID** et **Speed** (si « Speed » n'existe pas, cherche « Voice settings » ou « TTS »).
-3. Dans l'onglet **Agent**, choisis le **LLM** : prends un modèle **Claude Haiku** (le plus récent de la liste) ou, à défaut, un autre modèle rapide.
-4. Copie l'**Agent ID** (commence par `agent_`).
-
-Le texte du system prompt de l'agent n'a plus d'importance : l'app le remplace à chaque séance par celui de `src/config/personalities.ts`.
+Si tu préfères le faire à la main : agent → **Security** → **Overrides** → activer **System prompt**, **First message**, **Voice ID**, **Speed** ; onglet **Agent** → **LLM** → **Claude Haiku**.
 
 ### 2. Les clés
 
@@ -82,5 +77,6 @@ Structure :
 - `src/config/personalities.ts` : personnalités (prénom, caractère, consignes). `src/config/voices.ts` : voix. `src/config/speeds.ts` : vitesses.
 - `src/app/api/elevenlabs/session/route.ts` : crée le jeton de conversation et prépare les consignes envoyées à l'agent. La clé API ne va jamais sur le téléphone.
 - `src/app/api/bilan/route.ts` : mots du jour et encouragement via Claude (Haiku par défaut).
+- `src/app/api/elevenlabs/agent/route.ts` et `/reglages` : état de l'agent ElevenLabs et réglage automatique (overrides, LLM Claude Haiku, variable `ELEVENLABS_AGENT_LLM` pour changer de modèle).
 - `src/lib/progress.ts` : série de jours et minutes du jour (stockage local, V1).
 - `src/components/voice-test.tsx` et `/test-voix` : page de test des voix (V0).
