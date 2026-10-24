@@ -139,4 +139,9 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 
 ## État du projet
 
-- Rien de construit pour l'instant. Prochaine étape : V0.
+- **V0 construite, en attente de validation par Cherif.** Branche `claude/peaceful-feynman-txssvf`.
+  - Next.js 16 (App Router, Tailwind v4, PWA installable), SDK `@elevenlabs/react`.
+  - Page unique `src/components/voice-test.tsx` : 3 voix (`src/config/voices.ts`), bouton Parler, orbe qui réagit à la voix, délai de réponse (dernier / moyen / meilleur), texte de la conversation, choix WebRTC / WebSocket, étoile « ma préférée ».
+  - Route serveur `src/app/api/elevenlabs/session/route.ts` : jeton WebRTC ou URL signée, clé API uniquement côté serveur, voix imposée par override TTS (à activer dans l'agent ElevenLabs → Security).
+  - Variables : `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` (voir `.env.example`). Mise en route pas à pas dans `README.md`.
+- Prochaine étape : Cherif teste sur téléphone, choisit la voix et confirme le délai. Ensuite : maquette des écrans V1, puis V1.
