@@ -139,8 +139,11 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 
 ## État du projet
 
-- **V0 validée par Cherif (24 oct. 2026)**, fusionnée dans `main`. Il discute avec les 3 voix sur son téléphone ; délai moyen sous 2 s ; l'interruption marche à chaque fois. Voix retenue : **George**.
-  - Next.js 16 (App Router, Tailwind v4, PWA installable), SDK `@elevenlabs/react`.
-  - Page `src/components/voice-test.tsx`, voix dans `src/config/voices.ts`, route serveur `src/app/api/elevenlabs/session/route.ts` (clé API uniquement côté serveur, voix imposée par override TTS).
-  - Variables : `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` (voir `.env.example`). Mise en route dans `README.md`.
-- **V1 en préparation** : maquette des écrans (accueil, conversation, fin de séance) à faire valider par Cherif avant d'écrire le code.
+- **V0 validée par Cherif (24 oct. 2026)**, fusionnée dans `main`. Voix retenue : **George**. Délai moyen sous 2 s, interruption OK. Page conservée sur `/test-voix`.
+- **V1 construite, en attente de validation par Cherif.** Maquette validée (Max = le pote).
+  - `src/components/app.tsx` : accueil (série, objectif 10 min, vitesse), conversation (appui pour parler via `micMuted`, Répète, Vitesse avec reconnexion et reprise du contexte, Texte, Terminer), fin de séance (minutes, prises de parole, part de parole, mots du jour, encouragement).
+  - Config : `src/config/personalities.ts` (Max, consignes en anglais), `src/config/speeds.ts`, `src/config/voices.ts`.
+  - Serveur : `src/app/api/elevenlabs/session/route.ts` renvoie le jeton et les overrides (prompt, first message, voix, vitesse) ; `src/app/api/bilan/route.ts` appelle Claude (`ANTHROPIC_MODEL`, défaut `claude-haiku-5-5`).
+  - Progression (série, minutes du jour) en localStorage jusqu'à la V3.
+  - Côté ElevenLabs, l'agent doit autoriser les overrides System prompt, First message, Voice ID, Speed ; LLM choisi dans le dashboard (Claude Haiku).
+- Prochaine étape : Cherif teste 10 minutes sans bug sur téléphone. Ensuite V2.

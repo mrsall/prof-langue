@@ -78,3 +78,36 @@ body {
     animation: none;
   }
 }
+
+/* Avatar : fond et bouche animée quand le personnage parle */
+:root {
+  --avatar-bg: #e4e6f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --avatar-bg: #262a44;
+  }
+}
+.avatar-mouth-open {
+  opacity: 0;
+}
+.avatar-speaking .avatar-mouth-open {
+  animation: mouth-open 0.32s steps(1) infinite;
+}
+.avatar-speaking .avatar-mouth-closed {
+  animation: mouth-closed 0.32s steps(1) infinite;
+}
+@keyframes mouth-open {
+  0%, 49% { opacity: 0; }
+  50%, 100% { opacity: 1; }
+}
+@keyframes mouth-closed {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-speaking .avatar-mouth-open,
+  .avatar-speaking .avatar-mouth-closed {
+    animation: none;
+  }
+}
