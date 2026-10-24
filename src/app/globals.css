@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f6f7fb;
+  --bg-elevated: #ffffff;
+  --fg: #0f1222;
+  --fg-muted: #5b6078;
+  --border: rgba(15, 18, 34, 0.08);
+  --accent: #5b5bff;
+  --accent-soft: rgba(91, 91, 255, 0.12);
+  --accent-contrast: #ffffff;
+  --speaking: #19c37d;
+  --listening: #ff8a3d;
+  --danger: #ff4d6d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0d17;
+    --bg-elevated: #151829;
+    --fg: #f3f4fa;
+    --fg-muted: #9aa0b8;
+    --border: rgba(255, 255, 255, 0.08);
+    --accent: #7c7cff;
+    --accent-soft: rgba(124, 124, 255, 0.16);
+    --accent-contrast: #0b0d17;
+    --speaking: #2bd98a;
+    --listening: #ffa05c;
+    --danger: #ff5c7a;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-elevated: var(--bg-elevated);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-line: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-speaking: var(--speaking);
+  --color-listening: var(--listening);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* Orbe qui pulse quand l'IA parle */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+.animate-breathe {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-breathe {
+    animation: none;
+  }
+}
