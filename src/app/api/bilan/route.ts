@@ -61,6 +61,11 @@ function parseResult(text: string): BilanResult {
   }
 }
 
+/** Dit seulement si la clé Anthropic est en place (page Réglages). */
+export async function GET() {
+  return Response.json({ available: Boolean(process.env.ANTHROPIC_API_KEY) });
+}
+
 export async function POST(request: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
     return Response.json(emptyBilan(false));

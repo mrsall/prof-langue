@@ -659,8 +659,8 @@ function HomeScreen({
       </button>
       <p className="text-center text-xs text-muted">
         Mode ami · anglais. Les autres modes et le français arrivent en V2. ·{" "}
-        <Link href="/test-voix" className="underline">
-          Test des voix
+        <Link href="/reglages" className="underline">
+          Réglages
         </Link>
       </p>
     </main>
