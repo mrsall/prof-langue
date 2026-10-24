@@ -144,6 +144,7 @@ function VoiceTestInner() {
         conversationToken?: string;
         signedUrl?: string;
         voiceId?: string | null;
+        overrides?: Record<string, unknown>;
       };
       if (!res.ok) {
         setError(data.error ?? "Le serveur n'a pas répondu. Réessaie dans un instant.");
@@ -151,7 +152,7 @@ function VoiceTestInner() {
       }
 
       activeVoiceKey.current = voice.key;
-      const overrides = data.voiceId ? { tts: { voiceId: data.voiceId } } : undefined;
+      const overrides = data.overrides ?? (data.voiceId ? { tts: { voiceId: data.voiceId } } : undefined);
 
       if (data.connectionType === "websocket" && data.signedUrl) {
         startSession({ signedUrl: data.signedUrl, connectionType: "websocket", overrides });

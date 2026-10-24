@@ -1,5 +1,5 @@
-import { VoiceTest } from "@/components/voice-test";
+import { App } from "@/components/app";
 
 export default function Home() {
-  return <VoiceTest />;
+  return <App />;
 }

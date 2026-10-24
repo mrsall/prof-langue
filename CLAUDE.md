@@ -132,16 +132,18 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 
 ## Questions ouvertes
 
-- Voix retenue (choix en V0).
+- ~~Voix retenue (choix en V0).~~ Réglé : **George** (britannique, homme, `JBFqnCBsobJjWmhhKeHm`).
 - Prénoms et caractère détaillé de chaque personnalité.
 - Plafond de dépense quotidien.
 - Heure du rappel quotidien.
 
 ## État du projet
 
-- **V0 construite, en attente de validation par Cherif.** Branche `claude/peaceful-feynman-txssvf`.
-  - Next.js 16 (App Router, Tailwind v4, PWA installable), SDK `@elevenlabs/react`.
-  - Page unique `src/components/voice-test.tsx` : 3 voix (`src/config/voices.ts`), bouton Parler, orbe qui réagit à la voix, délai de réponse (dernier / moyen / meilleur), texte de la conversation, choix WebRTC / WebSocket, étoile « ma préférée ».
-  - Route serveur `src/app/api/elevenlabs/session/route.ts` : jeton WebRTC ou URL signée, clé API uniquement côté serveur, voix imposée par override TTS (à activer dans l'agent ElevenLabs → Security).
-  - Variables : `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` (voir `.env.example`). Mise en route pas à pas dans `README.md`.
-- Prochaine étape : Cherif teste sur téléphone, choisit la voix et confirme le délai. Ensuite : maquette des écrans V1, puis V1.
+- **V0 validée par Cherif (24 oct. 2026)**, fusionnée dans `main`. Voix retenue : **George**. Délai moyen sous 2 s, interruption OK. Page conservée sur `/test-voix`.
+- **V1 construite, en attente de validation par Cherif.** Maquette validée (Max = le pote).
+  - `src/components/app.tsx` : accueil (série, objectif 10 min, vitesse), conversation (appui pour parler via `micMuted`, Répète, Vitesse avec reconnexion et reprise du contexte, Texte, Terminer), fin de séance (minutes, prises de parole, part de parole, mots du jour, encouragement).
+  - Config : `src/config/personalities.ts` (Max, consignes en anglais), `src/config/speeds.ts`, `src/config/voices.ts`.
+  - Serveur : `src/app/api/elevenlabs/session/route.ts` renvoie le jeton et les overrides (prompt, first message, voix, vitesse) ; `src/app/api/bilan/route.ts` appelle Claude (`ANTHROPIC_MODEL`, défaut `claude-haiku-5-5`).
+  - Progression (série, minutes du jour) en localStorage jusqu'à la V3.
+  - Côté ElevenLabs, l'agent doit autoriser les overrides System prompt, First message, Voice ID, Speed ; LLM choisi dans le dashboard (Claude Haiku).
+- Prochaine étape : Cherif teste 10 minutes sans bug sur téléphone. Ensuite V2.

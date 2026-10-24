@@ -2,78 +2,68 @@
 
 Web app mobile pour parler anglais (puis français) à voix haute avec une IA qui répond avec une voix naturelle. Le cahier des charges complet est dans `CLAUDE.md`.
 
-## Où en est le projet : V0 (test des voix)
+## Où en est le projet : V1 (mode ami, anglais, appui pour parler)
 
-La V0 est une seule page : tu choisis une voix parmi trois, tu appuies sur **Parler**, et tu discutes en anglais. L'écran affiche le délai de réponse mesuré à chaque tour. Le but est que tu choisisses **la voix la plus naturelle** et que tu vérifies que **le délai est acceptable** (objectif : moins de 2 secondes).
+Tu ouvres l'app, tu appuies sur **Commencer**, et tu discutes en anglais avec **Max**, ton pote (voix George). Pendant la discussion :
 
-Voix proposées (modifiables dans `src/config/voices.ts`) :
+- **Maintiens le gros bouton micro** pendant que tu parles, relâche pour envoyer. Le micro est coupé le reste du temps, pratique dehors ou dans le bruit.
+- Si Max parle et que tu appuies sur le micro, il s'arrête et t'écoute.
+- **Répète** : Max redit sa dernière phrase, un peu plus lentement.
+- **Vitesse** : lent, normal ou rapide. Tu peux changer pendant la discussion (Max reprend là où vous en étiez après une seconde de reconnexion).
+- **Texte** : affiche ou cache le texte de la conversation.
+- **Terminer** : bilan de la séance (minutes, prises de parole, part de temps où c'est toi qui parles, mots du jour, un mot de Max). Le bilan complet avec les erreurs arrive en V3.
 
-| Voix | Accent | Genre |
-| --- | --- | --- |
-| Brian | américain | homme |
-| Jessica | américain | femme |
-| George | britannique | homme |
+L'accueil montre ta série de jours et l'objectif du jour (10 minutes). Pour l'instant, ces chiffres sont gardés sur ton téléphone ; la base de données arrive en V3.
 
-## Mise en route (à faire une seule fois, environ 15 minutes)
+La page de test des voix de la V0 reste accessible en bas de l'accueil (lien « Test des voix »).
 
-### 1. Créer l'agent dans ElevenLabs
+## Mise en route (à faire une seule fois)
 
-1. Va sur [elevenlabs.io](https://elevenlabs.io), menu **Agents** (ElevenAgents), puis **Create agent** → **Blank agent**.
-2. Nom : `Prof de langues V0`. Langue : **English**.
-3. **First message** (ce qu'il dit en premier) :
-   `Hey Cherif! Good to see you. How's your day going so far?`
-4. **System prompt** : colle le texte ci-dessous.
-5. **LLM** : choisis un modèle rapide (par exemple Gemini Flash ou GPT-4o mini, peu importe pour la V0).
-6. **Voice** : laisse celle par défaut, l'app impose la voix choisie à chaque conversation.
-7. Onglet **Security** (ou **Advanced** → **Overrides**) : active l'override **Voice ID** (parfois nommé « TTS voice »). Sans ça, les trois voix sonneront pareil.
-8. Enregistre, puis copie l'**Agent ID** (il commence par `agent_`).
+### 1. L'agent ElevenLabs
 
-Texte du system prompt :
+Si tu as déjà l'agent de la V0, garde-le. Sinon : [elevenlabs.io](https://elevenlabs.io) → **Agents** → **Create agent** → **Blank agent**, langue **English**.
 
-```
-You are a friendly English-speaking buddy helping Cherif, a French speaker from Senegal, practice spoken English.
-Rules:
-- Keep every reply short: one to three sentences, then ask a question or invite him to continue.
-- Use simple, natural everyday English with contractions. Speak at a relaxed pace.
-- Never mock his accent. Never say "error". If he makes a mistake, just use the correct form naturally in your reply.
-- If he asks "how do you say ..." in French, give the English word or phrase, ask him to repeat it once, then continue.
-- If he is silent or stuck, suggest a sentence starter or two possible answers.
-- Topics you like: tech, anime, video games, football, movies, his day.
-```
+Important pour la V1 : les consignes de Max, sa première phrase, sa voix et sa vitesse sont envoyées par l'app au début de chaque séance. Il faut donc autoriser l'agent à les recevoir :
 
-### 2. Récupérer une clé API ElevenLabs
+1. Ouvre l'agent → onglet **Security** (ou **Advanced** → **Overrides**).
+2. Active les overrides **System prompt**, **First message**, **Voice ID** et **Speed** (si « Speed » n'existe pas, cherche « Voice settings » ou « TTS »).
+3. Dans l'onglet **Agent**, choisis le **LLM** : prends un modèle **Claude Haiku** (le plus récent de la liste) ou, à défaut, un autre modèle rapide.
+4. Copie l'**Agent ID** (commence par `agent_`).
 
-Sur elevenlabs.io : icône de profil → **API Keys** → **Create API key**. Laisse les permissions par défaut, copie la clé. Elle ne s'affiche qu'une fois.
+Le texte du system prompt de l'agent n'a plus d'importance : l'app le remplace à chaque séance par celui de `src/config/personalities.ts`.
 
-### 3. Mettre les clés dans Vercel (jamais dans le code)
+### 2. Les clés
 
-1. Sur [vercel.com](https://vercel.com), **Add New → Project**, importe ce dépôt GitHub. Garde les réglages par défaut (Next.js).
-2. Avant de déployer, ouvre **Environment Variables** et ajoute :
-   - `ELEVENLABS_API_KEY` = ta clé API
-   - `ELEVENLABS_AGENT_ID` = l'Agent ID
-   Coche les trois environnements (Production, Preview, Development).
-3. Clique **Deploy**. À la fin, Vercel donne une adresse du type `https://prof-langue.vercel.app`.
+- **ElevenLabs** : profil → **API Keys** → **Create API key**.
+- **Anthropic** (pour les mots du jour du bilan) : [console.anthropic.com](https://console.anthropic.com) → **API Keys** → **Create key**. Facultatif : sans elle, le bilan n'affiche pas les mots du jour.
 
-Le fichier `.env.example` liste toutes les variables possibles.
+### 3. Les variables dans Vercel (jamais dans le code)
+
+Vercel → ton projet → **Settings** → **Environment Variables** :
+
+| Variable | Valeur |
+| --- | --- |
+| `ELEVENLABS_API_KEY` | ta clé ElevenLabs |
+| `ELEVENLABS_AGENT_ID` | l'Agent ID |
+| `ANTHROPIC_API_KEY` | ta clé Anthropic (facultatif) |
+
+Coche les trois environnements. Après un ajout, relance un déploiement (**Deployments** → les trois points → **Redeploy**). Le fichier `.env.example` liste toutes les variables possibles.
 
 ### 4. Tester sur ton téléphone
 
-1. Ouvre l'adresse Vercel dans **Chrome** (Android) ou **Safari** (iPhone).
-2. Appuie sur **Parler avec Brian**, autorise le micro quand le téléphone le demande.
-3. Parle en anglais. L'IA répond, et tu peux lui couper la parole en parlant par-dessus.
-4. Fais au moins 5 échanges par voix, puis **Terminer** et change de voix.
-5. Appuie sur l'étoile ☆ de la voix que tu préfères.
-6. Dans **Réglages**, tu peux basculer entre WebRTC et WebSocket si la voix coupe ou si le délai est long. Compare les deux.
-7. Pour installer l'app sur l'écran d'accueil : menu du navigateur → **Ajouter à l'écran d'accueil**.
+1. Ouvre l'adresse Vercel dans **Chrome** (Android) ou **Safari** (iPhone). Pour l'installer : menu du navigateur → **Ajouter à l'écran d'accueil**.
+2. Appuie sur **Commencer**, autorise le micro.
+3. Discute 10 minutes avec Max en maintenant le bouton pour parler. Essaie **Répète**, change la **Vitesse**, affiche le **Texte**, interromps-le en appuyant sur le micro pendant qu'il parle.
+4. Appuie sur **Terminer** et regarde le bilan.
 
 ### 5. Ce que tu me dis ensuite
 
-- La voix que tu préfères (et si tu veux en tester d'autres).
-- Le délai moyen affiché pour chaque voix, et si ça te semble naturel.
-- Si la connexion a coupé, à quel moment, et avec quel réseau (wifi, 4G).
-- Si l'IA t'a bien laissé l'interrompre.
+- Est-ce que tu as tenu 10 minutes sans bug ? Si ça a coupé, à quel moment et sur quel réseau.
+- Le délai de réponse après que tu relâches le bouton : naturel ou trop long ?
+- Est-ce que Max te laisse parler (réponses courtes, questions) ou parle trop ?
+- Le bouton « maintiens pour parler » est-il pratique ou préfères-tu un mode mains libres (prévu en V2) ?
 
-Quand tu valides la V0, on passe à la V1 (mode ami complet, appui pour parler, Répète, vitesse de la voix).
+Quand tu valides la V1, on passe à la V2 (six modes, français, choix du sujet, mains libres, niveau de correction).
 
 ## Pour les développeurs
 
@@ -86,10 +76,11 @@ npm run lint && npm run build
 
 Structure :
 
-- `src/app/page.tsx` : page d'accueil (V0).
-- `src/components/voice-test.tsx` : écran de test, mesure du délai, transcription.
-- `src/app/api/elevenlabs/session/route.ts` : crée le jeton de conversation côté serveur. La clé API ne va jamais sur le téléphone.
-- `src/config/voices.ts` : liste des voix testées.
-- `src/app/manifest.ts` : manifeste PWA (installation sur l'écran d'accueil).
-
-Le délai affiché est le temps entre la fin de la phrase de l'utilisateur (détection de voix) et le début de l'audio de la réponse. C'est une mesure côté téléphone, donc une approximation du ressenti.
+- `src/components/app.tsx` : les trois écrans (accueil, conversation, fin de séance) et la logique de séance.
+- `src/components/push-to-talk-button.tsx` : bouton « maintiens pour parler ».
+- `src/components/max-avatar.tsx` : avatar illustré de Max, animé quand il parle.
+- `src/config/personalities.ts` : personnalités (prénom, caractère, consignes). `src/config/voices.ts` : voix. `src/config/speeds.ts` : vitesses.
+- `src/app/api/elevenlabs/session/route.ts` : crée le jeton de conversation et prépare les consignes envoyées à l'agent. La clé API ne va jamais sur le téléphone.
+- `src/app/api/bilan/route.ts` : mots du jour et encouragement via Claude (Haiku par défaut).
+- `src/lib/progress.ts` : série de jours et minutes du jour (stockage local, V1).
+- `src/components/voice-test.tsx` et `/test-voix` : page de test des voix (V0).
