@@ -2,6 +2,8 @@ import { connection } from "next/server";
 import { dbAvailable, dbErrorMessage, setSetting } from "@/lib/db";
 import { getVapid, getSubscription, sendPush, type StoredSubscription } from "@/lib/push";
 
+export const maxDuration = 30;
+
 /**
  * Abonnement aux rappels : GET clé publique + état, POST enregistre
  * l'abonnement du téléphone (et envoie une notification de test), DELETE le retire.

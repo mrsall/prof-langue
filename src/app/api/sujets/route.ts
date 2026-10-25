@@ -2,6 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 import { fallbackTopics, TOPICS } from "@/config/topics";
 
+export const maxDuration = 30;
+
 /**
  * Propose 3 ou 4 sujets adaptés au mode, à la langue et à l'historique.
  * Générés par Claude ; sans clé, liste de secours depuis src/config/topics.ts.

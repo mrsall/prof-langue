@@ -3,6 +3,8 @@ import { isLanguage, type Language } from "@/config/personalities";
 import { LEVELS, saveLevel, type LevelInfo } from "@/lib/settings";
 import { dbAvailable } from "@/lib/db";
 
+export const maxDuration = 30;
+
 /**
  * Évalue le niveau (A1 à C2) à partir du texte du test de niveau, puis
  * l'enregistre. Le niveau est ensuite injecté dans les consignes des

@@ -2,6 +2,8 @@ import { connection } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 
+export const maxDuration = 30;
+
 /**
  * Bilan de fin de séance : mots utiles, 3 erreurs principales avec la bonne
  * forme, un encouragement, et s'il faut proposer une séance avec la prof.

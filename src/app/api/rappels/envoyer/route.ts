@@ -5,6 +5,8 @@ import { sendPush } from "@/lib/push";
 import { PERSONALITIES, type Language } from "@/config/personalities";
 import { randomTopic } from "@/config/topics";
 
+export const maxDuration = 30;
+
 /**
  * Appelée par le cron Vercel (vercel.json) une fois par jour, ou à la main
  * avec ?force=1 depuis la page Réglages. Envoie le rappel du jour avec un

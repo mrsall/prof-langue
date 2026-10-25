@@ -72,12 +72,12 @@ export async function db(): Promise<Sql | null> {
       max: 1,
       prepare: false, // compatible avec le pooler Supabase en mode transaction
       idle_timeout: 20,
-      connect_timeout: 6,
+      connect_timeout: 8,
     });
   }
   const sql = globalForDb.__profLangueSql;
   if (!globalForDb.__profLangueSchema) {
-    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql), 8000).catch((error) => {
+    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql), 15000).catch((error) => {
       globalForDb.__profLangueSchema = undefined;
       globalForDb.__profLangueFailure = { at: Date.now(), error };
       throw error;
@@ -93,52 +93,57 @@ export function resetDbBreaker() {
   globalForDb.__profLangueFailure = undefined;
 }
 
+const SCHEMA_SQL = `
+create table if not exists settings (
+  key text primary key,
+  value jsonb not null,
+  updated_at timestamptz not null default now()
+);
+create table if not exists sessions (
+  id bigserial primary key,
+  started_at timestamptz not null default now(),
+  kind text not null default 'conversation',
+  language text not null,
+  personality text not null,
+  topic text,
+  seconds integer not null default 0,
+  user_turns integer not null default 0,
+  user_share integer not null default 0,
+  transcript jsonb,
+  corrections jsonb,
+  errors jsonb,
+  words jsonb,
+  encouragement text,
+  level text,
+  cost_fcfa numeric not null default 0
+);
+create table if not exists words (
+  id bigserial primary key,
+  language text not null,
+  word text not null,
+  translation text,
+  session_id bigint,
+  created_at timestamptz not null default now(),
+  due_at timestamptz not null default now() + interval '1 day',
+  stage integer not null default 0,
+  reviews integer not null default 0,
+  lapses integer not null default 0
+);
+create unique index if not exists words_language_word_idx on words (language, lower(word));
+create table if not exists errors (
+  id bigserial primary key,
+  session_id bigint,
+  language text not null,
+  wrong text not null,
+  "right" text not null,
+  tip text,
+  created_at timestamptz not null default now()
+);
+`;
+
+/** Crée les tables en un seul aller-retour (important quand la base est loin). */
 async function ensureSchema(sql: Sql) {
-  await sql`create table if not exists settings (
-    key text primary key,
-    value jsonb not null,
-    updated_at timestamptz not null default now()
-  )`;
-  await sql`create table if not exists sessions (
-    id bigserial primary key,
-    started_at timestamptz not null default now(),
-    kind text not null default 'conversation',
-    language text not null,
-    personality text not null,
-    topic text,
-    seconds integer not null default 0,
-    user_turns integer not null default 0,
-    user_share integer not null default 0,
-    transcript jsonb,
-    corrections jsonb,
-    errors jsonb,
-    words jsonb,
-    encouragement text,
-    level text,
-    cost_fcfa numeric not null default 0
-  )`;
-  await sql`create table if not exists words (
-    id bigserial primary key,
-    language text not null,
-    word text not null,
-    translation text,
-    session_id bigint,
-    created_at timestamptz not null default now(),
-    due_at timestamptz not null default now() + interval '1 day',
-    stage integer not null default 0,
-    reviews integer not null default 0,
-    lapses integer not null default 0
-  )`;
-  await sql`create unique index if not exists words_language_word_idx on words (language, lower(word))`;
-  await sql`create table if not exists errors (
-    id bigserial primary key,
-    session_id bigint,
-    language text not null,
-    wrong text not null,
-    "right" text not null,
-    tip text,
-    created_at timestamptz not null default now()
-  )`;
+  await sql.unsafe(SCHEMA_SQL);
 }
 
 export async function getSetting<T>(key: string, fallback: T): Promise<T> {

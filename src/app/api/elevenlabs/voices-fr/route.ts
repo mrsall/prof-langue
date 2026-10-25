@@ -1,6 +1,8 @@
 import { connection } from "next/server";
 import { ensureFrenchVoices, listFrenchVoices } from "@/lib/french-voices";
 
+export const maxDuration = 30;
+
 /**
  * Voix françaises du compte ElevenLabs.
  * GET  : état (combien de voix françaises, lesquelles).
