@@ -141,7 +141,7 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 
 - **V0 validée par Cherif (24 oct. 2026)**, fusionnée dans `main`. Voix retenue : **George**. Délai moyen sous 2 s, interruption OK. Page conservée sur `/test-voix`.
 - **V1 construite, en attente de validation par Cherif.** Maquette validée (Max = le pote).
-  - `src/components/app.tsx` : accueil (série, objectif 10 min, vitesse), conversation (appui pour parler via `micMuted`, Répète, Vitesse avec reconnexion et reprise du contexte, Texte, Terminer), fin de séance (minutes, prises de parole, part de parole, mots du jour, encouragement).
+  - `src/components/app.tsx` : accueil (série, objectif 10 min, vitesse), conversation (mains libres par défaut ou appui pour parler via `micMuted`, choix sur l'accueil et en séance ; Répète, Vitesse avec reconnexion et reprise du contexte, Texte, Terminer), fin de séance (minutes, prises de parole, part de parole, mots du jour, encouragement).
   - Config : `src/config/personalities.ts` (Max, consignes en anglais), `src/config/speeds.ts`, `src/config/voices.ts`.
   - Serveur : `src/app/api/elevenlabs/session/route.ts` renvoie le jeton et les overrides (prompt, first message, voix, vitesse) ; `src/app/api/bilan/route.ts` appelle Claude (`ANTHROPIC_MODEL`, défaut `claude-haiku-5-5`).
   - Progression (série, minutes du jour) en localStorage jusqu'à la V3.

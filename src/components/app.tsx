@@ -30,6 +30,8 @@ type ConnectionType = "webrtc" | "websocket";
 const SPEED_KEY = "prof-langue:speed";
 const CONNECTION_KEY = "prof-langue:v0:connection";
 const SHOW_TEXT_KEY = "prof-langue:show-text";
+const TALK_MODE_KEY = "prof-langue:talk-mode";
+type TalkMode = "mains-libres" | "appui";
 const REPEAT_COMMAND = "Please say your last sentence again, a little slower.";
 
 const personality: Personality = PERSONALITIES[0];
@@ -56,6 +58,10 @@ function AppInner() {
   const [notice, setNotice] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [holding, setHolding] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [savedTalkMode, setSavedTalkMode] = useLocalStorage(TALK_MODE_KEY);
+  const talkMode: TalkMode = savedTalkMode === "appui" ? "appui" : "mains-libres";
+  const handsFree = talkMode === "mains-libres";
   const [elapsed, setElapsed] = useState(0);
   const [bilan, setBilan] = useState<BilanResult | null>(null);
   const [bilanLoading, setBilanLoading] = useState(false);
@@ -73,7 +79,6 @@ function AppInner() {
   // Mesures de la séance (sans re-render).
   const connectAt = useRef<number | null>(null);
   const userTalkMs = useRef(0);
-  const holdStart = useRef<number | null>(null);
   const agentTalkMs = useRef(0);
   const agentSpeakStart = useRef<number | null>(null);
   const userTurns = useRef(0);
@@ -100,10 +105,25 @@ function AppInner() {
     });
   }, []);
 
+  const vadActive = useRef(false);
+  const vadStart = useRef<number | null>(null);
+
   const conversation = useConversation({
-    micMuted: !holding,
+    micMuted: handsFree ? muted : !holding,
+    onVadScore: ({ vadScore }) => {
+      const now = performance.now();
+      if (vadScore > 0.6 && !vadActive.current) {
+        vadActive.current = true;
+        vadStart.current = now;
+      } else if (vadScore < 0.3 && vadActive.current) {
+        vadActive.current = false;
+        if (vadStart.current != null) userTalkMs.current += now - vadStart.current;
+        vadStart.current = null;
+      }
+    },
     onConnect: () => {
       everConnected.current = true;
+      setMuted(false);
       setError(null);
       setNotice(null);
       if (!restarting.current) {
@@ -311,14 +331,7 @@ function AppInner() {
     (next: boolean) => {
       if (!connected && next) return;
       setHolding(next);
-      if (next) {
-        holdStart.current = performance.now();
-        navigator.vibrate?.(30);
-      } else if (holdStart.current != null) {
-        userTalkMs.current += performance.now() - holdStart.current;
-        holdStart.current = null;
-        navigator.vibrate?.(20);
-      }
+      navigator.vibrate?.(next ? 30 : 20);
     },
     [connected],
   );
@@ -398,9 +411,10 @@ function AppInner() {
   const finish = useCallback(async () => {
     ending.current = true;
     setHolding(false);
-    if (holdStart.current != null) {
-      userTalkMs.current += performance.now() - holdStart.current;
-      holdStart.current = null;
+    if (vadActive.current && vadStart.current != null) {
+      userTalkMs.current += performance.now() - vadStart.current;
+      vadActive.current = false;
+      vadStart.current = null;
     }
     if (agentSpeakStart.current != null) {
       agentTalkMs.current += performance.now() - agentSpeakStart.current;
@@ -446,6 +460,8 @@ function AppInner() {
       <HomeScreen
         speed={speed}
         onSpeedChange={setSavedSpeed}
+        talkMode={talkMode}
+        onTalkModeChange={setSavedTalkMode}
         streak={progress.streak}
         minutesToday={progress.minutesToday}
         goalMinutes={progress.goalMinutes}
@@ -478,7 +494,11 @@ function AppInner() {
             ? "Je t'écoute…"
             : isSpeaking
               ? `${personality.name} parle…`
-              : "À toi de parler";
+              : handsFree
+                ? muted
+                  ? "Micro coupé"
+                  : "Je t'écoute, parle quand tu veux"
+                : "À toi de parler";
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -521,9 +541,15 @@ function AppInner() {
         )}
         {!error && !notice && connected && !holding && (
           <p className="max-w-xs text-sm text-muted">
-            {isSpeaking
-              ? "Appuie sur le micro pour l'interrompre."
-              : "Maintiens le bouton pendant que tu parles, relâche pour envoyer."}
+            {handsFree
+              ? isSpeaking
+                ? "Parle par-dessus pour l'interrompre."
+                : muted
+                  ? "Appuie sur le micro pour le rouvrir."
+                  : "Max détecte la fin de ta phrase tout seul."
+              : isSpeaking
+                ? "Appuie sur le micro pour l'interrompre."
+                : "Maintiens le bouton pendant que tu parles, relâche pour envoyer."}
           </p>
         )}
         {error && (
@@ -595,8 +621,69 @@ function AppInner() {
         </ToolButton>
       </section>
 
-      <PushToTalkButton holding={holding} disabled={!connected} interrupting={isSpeaking} onHoldChange={onHoldChange} />
+      {handsFree ? (
+        <HandsFreeMic
+          muted={muted}
+          disabled={!connected}
+          speaking={isSpeaking}
+          onToggle={() => {
+            setMuted((m) => !m);
+            navigator.vibrate?.(20);
+          }}
+        />
+      ) : (
+        <PushToTalkButton holding={holding} disabled={!connected} interrupting={isSpeaking} onHoldChange={onHoldChange} />
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          setSavedTalkMode(handsFree ? "appui" : "mains-libres");
+          setHolding(false);
+          setMuted(false);
+        }}
+        className="mx-auto text-xs text-muted underline"
+      >
+        {handsFree ? "Passer en appui pour parler (endroit bruyant)" : "Passer en mains libres"}
+      </button>
     </main>
+  );
+}
+
+function HandsFreeMic({
+  muted,
+  disabled,
+  speaking,
+  onToggle,
+}: {
+  muted: boolean;
+  disabled: boolean;
+  speaking: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2 select-none">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={!muted}
+        aria-label={muted ? "Micro coupé, appuie pour le rouvrir" : "Micro ouvert, appuie pour le couper"}
+        onClick={onToggle}
+        className={`grid h-28 w-28 place-items-center rounded-full transition-all duration-150 disabled:opacity-50 ${
+          muted
+            ? "border-[3px] border-line bg-elevated text-muted"
+            : speaking
+              ? "border-[3px] border-speaking bg-elevated text-fg"
+              : "bg-listening text-fg shadow-[0_0_0_14px_rgba(255,160,92,0.22)] animate-breathe"
+        }`}
+      >
+        <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="3" width="6" height="11" rx="3" />
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+          {muted && <path d="M4 4l16 16" />}
+        </svg>
+      </button>
+      <span className="text-sm font-semibold text-muted">{muted ? "Micro coupé" : "Micro ouvert"}</span>
+    </div>
   );
 }
 
@@ -634,6 +721,8 @@ function ToolButton({
 function HomeScreen({
   speed,
   onSpeedChange,
+  talkMode,
+  onTalkModeChange,
   streak,
   minutesToday,
   goalMinutes,
@@ -641,6 +730,8 @@ function HomeScreen({
 }: {
   speed: SpeedKey;
   onSpeedChange: (s: SpeedKey) => void;
+  talkMode: TalkMode;
+  onTalkModeChange: (m: TalkMode) => void;
   streak: number;
   minutesToday: number;
   goalMinutes: number;
@@ -691,6 +782,29 @@ function HomeScreen({
           </p>
         </div>
         <p className="max-w-xs rounded-2xl bg-accent-soft px-4 py-3 text-base leading-snug">{greeting}</p>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <span className="text-sm text-muted">Micro</span>
+        <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-line bg-elevated p-1" role="radiogroup" aria-label="Façon de parler">
+          {(
+            [
+              { key: "mains-libres", label: "Mains libres" },
+              { key: "appui", label: "Appui pour parler" },
+            ] as { key: TalkMode; label: string }[]
+          ).map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              role="radio"
+              aria-checked={talkMode === m.key}
+              onClick={() => onTalkModeChange(m.key)}
+              className={`h-10 rounded-xl text-sm font-medium ${talkMode === m.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="flex flex-col gap-2">

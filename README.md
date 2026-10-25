@@ -6,8 +6,8 @@ Web app mobile pour parler anglais (puis français) à voix haute avec une IA qu
 
 Tu ouvres l'app, tu appuies sur **Commencer**, et tu discutes en anglais avec **Max**, ton pote (voix George). Pendant la discussion :
 
-- **Maintiens le gros bouton micro** pendant que tu parles, relâche pour envoyer. Le micro est coupé le reste du temps, pratique dehors ou dans le bruit.
-- Si Max parle et que tu appuies sur le micro, il s'arrête et t'écoute.
+- **Mains libres** (par défaut) : le micro reste ouvert, tu parles quand tu veux, Max détecte la fin de ta phrase. Si tu parles pendant qu'il parle, il s'arrête et t'écoute. Un appui sur le gros bouton coupe le micro (et un autre le rouvre).
+- **Appui pour parler** (pour les endroits bruyants, réglable sur l'accueil ou pendant la discussion) : tu maintiens le gros bouton pendant que tu parles et tu relâches pour envoyer.
 - **Répète** : Max redit sa dernière phrase, un peu plus lentement.
 - **Vitesse** : lent, normal ou rapide. Tu peux changer pendant la discussion (Max reprend là où vous en étiez après une seconde de reconnexion).
 - **Texte** : affiche ou cache le texte de la conversation.
@@ -56,7 +56,7 @@ Coche les trois environnements. Après un ajout, relance un déploiement (**Depl
 - Est-ce que tu as tenu 10 minutes sans bug ? Si ça a coupé, à quel moment et sur quel réseau.
 - Le délai de réponse après que tu relâches le bouton : naturel ou trop long ?
 - Est-ce que Max te laisse parler (réponses courtes, questions) ou parle trop ?
-- Le bouton « maintiens pour parler » est-il pratique ou préfères-tu un mode mains libres (prévu en V2) ?
+- En mains libres, est-ce que Max te coupe trop vite ou attend trop longtemps avant de répondre ?
 
 Quand tu valides la V1, on passe à la V2 (six modes, français, choix du sujet, mains libres, niveau de correction).
 
