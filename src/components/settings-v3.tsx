@@ -120,6 +120,20 @@ export function SettingsV3() {
     }
   };
 
+  const [diag, setDiag] = useState<{ steps: { name: string; ok: boolean; detail: string; ms: number }[] } | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
+  const runDiag = async () => {
+    setDiagBusy(true);
+    try {
+      const res = await fetch("/api/diagnostic");
+      setDiag((await res.json()) as { steps: { name: string; ok: boolean; detail: string; ms: number }[] });
+    } catch {
+      setDiag({ steps: [{ name: "Diagnostic", ok: false, detail: "impossible de joindre le serveur de l'app", ms: 0 }] });
+    } finally {
+      setDiagBusy(false);
+    }
+  };
+
   if (state === null) {
     return <p className="text-sm text-muted">{error ?? "Chargement des réglages…"}</p>;
   }
@@ -140,6 +154,27 @@ export function SettingsV3() {
             {state.dbInfo.pooler ? " · pooler ✓" : " · pas le pooler ✗ (prends l'onglet Transaction pooler)"}
             {state.dbInfo.passwordPlaceholder ? " · mot de passe non remplacé ✗" : ""}
           </p>
+        )}
+        {state.db && state.dbError && (
+          <div className="flex flex-col gap-2">
+            <button type="button" disabled={diagBusy} onClick={runDiag} className="h-11 rounded-xl bg-accent text-sm font-bold text-accent-contrast disabled:opacity-60">
+              {diagBusy ? "Diagnostic en cours (jusqu'à 30 s)…" : "Lancer le diagnostic détaillé"}
+            </button>
+            {diag && (
+              <ul className="flex flex-col gap-1 rounded-xl bg-bg p-3 text-xs">
+                {diag.steps.map((st) => (
+                  <li key={st.name} className="flex gap-2">
+                    <span className={st.ok ? "text-speaking" : "text-danger"} aria-hidden>
+                      {st.ok ? "✓" : "✗"}
+                    </span>
+                    <span>
+                      <strong>{st.name}</strong> ({st.ms} ms) : {st.detail}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         <p className="text-sm text-muted">
           {state.db
