@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, setSetting } from "@/lib/db";
+import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
 
 /**
@@ -35,8 +35,8 @@ export async function GET() {
   };
   if (!state.db) return Response.json(state);
   try {
-    const sql = (await db())!;
-    const [en, fr, cost, reminder, push, today, month, due] = await Promise.all([
+    const sql = (await withTimeout(db(), 7000))!;
+    const [en, fr, cost, reminder, push, today, month, due] = await withTimeout(Promise.all([
       getLevel("en"),
       getLevel("fr"),
       getCostSettings(),
@@ -47,7 +47,7 @@ export async function GET() {
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
       sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
-    ]);
+    ]), 5000);
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
       fr: fr ? { level: fr.level, date: fr.date } : null,
