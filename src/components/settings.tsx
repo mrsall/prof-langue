@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { AgentStatus } from "@/app/api/elevenlabs/agent/route";
 import type { FrenchVoicesStatus } from "@/app/api/elevenlabs/voices-fr/route";
+import { SettingsV3 } from "@/components/settings-v3";
 
 /**
  * Page Réglages (V1) : configure l'agent ElevenLabs en un bouton et montre
@@ -185,6 +186,8 @@ export function Settings() {
             : "Sans clé Anthropic, le bilan n'affiche pas les mots du jour. Pour l'activer : Vercel → Settings → Environment Variables → ANTHROPIC_API_KEY, puis Redeploy."}
         </p>
       </section>
+
+      <SettingsV3 />
 
       <p className="text-center text-xs text-muted">
         <Link href="/test-voix" className="underline">

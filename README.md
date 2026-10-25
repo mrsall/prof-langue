@@ -2,34 +2,19 @@
 
 Web app mobile pour parler anglais (puis français) à voix haute avec une IA qui répond avec une voix naturelle. Le cahier des charges complet est dans `CLAUDE.md`.
 
-## Où en est le projet : V2 (six personnalités, anglais et français, sujets)
+## Où en est le projet : V3 (niveau, bilan complet, carnet, suivi, rappels, plafond)
 
-Tu ouvres l'app, tu choisis la langue (anglais ou français) et le personnage, tu appuies sur **Commencer**, tu choisis un sujet, et la discussion démarre. Trois touches au total : la langue et le personnage restent ceux de la dernière fois.
+Tout ce qui existait en V2 (six personnages, anglais et français, sujets, correction réglable, mains libres) reste, et l'app garde maintenant une mémoire grâce à une base de données :
 
-Les six personnages (prénoms modifiables dans `src/config/personalities.ts`) :
+- **Test de niveau** (5 minutes avec Emma, par langue) : proposé sur l'accueil au début, puis tous les mois. Le niveau obtenu (A1 à C2) est utilisé par tous les personnages pour adapter leur vocabulaire.
+- **Bilan complet** : minutes, prises de parole, 3 points à retenir avec la bonne forme et une explication, les mots du jour, un encouragement, le coût estimé de la séance, et le **texte de la séance** avec tes phrases corrigées surlignées.
+- **Carnet de mots** (écran Carnet) : les mots du jour y arrivent tout seuls. Révision espacée à J+1, J+3, J+7, J+21 : une carte, tu appuies pour voir la réponse, puis « Je savais » ou « Pas encore ». Ou **révision à la voix avec Emma**.
+- **Suivi** : jours de suite, minutes par semaine, niveau par langue, carnet, avec qui tu parles, coût du mois.
+- **Rappel quotidien** : une notification par jour avec un sujet, à l'heure choisie dans Réglages (sur iPhone, installe d'abord l'app sur l'écran d'accueil).
+- **Plafond de dépense** : coût par minute et plafond quotidien dans Réglages ; l'app prévient avant de lancer une séance au-delà, et pendant la discussion.
+- **Code d'accès** : si tu définis `APP_PIN` dans Vercel, l'app demande un code une fois par téléphone. Sans ça, n'importe qui ayant l'adresse peut utiliser tes minutes ElevenLabs.
 
-| Mode | Prénom | Voix | Correction par défaut |
-| --- | --- | --- | --- |
-| Ton pote | Max | George | Aucune |
-| Grand frère | Ibrahim | Brian | Légère |
-| Débatteur | Leo | Will | Légère |
-| Professeure | Emma | Sarah | Active |
-| Collègue | Thomas | Daniel | Légère |
-| Mise en situation | selon le rôle | Roger | Légère |
-
-Le sujet : 3 ou 4 propositions adaptées au mode (générées par Claude, jamais les mêmes que les dernières séances), **J'ai mon propre sujet** (tu le dis à voix haute quand le personnage te le demande) ou **Surprends-moi**.
-
-Pendant la discussion :
-
-- **Mains libres** (par défaut) : le micro reste ouvert, tu parles quand tu veux, le personnage détecte la fin de ta phrase. Si tu parles pendant qu'il parle, il s'arrête et t'écoute. Un appui sur le gros bouton coupe le micro.
-- **Appui pour parler** (endroits bruyants) : tu maintiens le gros bouton pendant que tu parles.
-- **Répète**, **Vitesse** (lent, normal, rapide) et **Correction** (aucune, légère, active) se changent à tout moment : le personnage reprend là où vous en étiez après une seconde de reconnexion.
-- **Texte** : affiche ou cache le texte de la conversation.
-- Chaque personnage se souvient des sujets de vos dernières séances (gardés sur ton téléphone).
-
-**Terminer** : bilan de la séance (minutes, prises de parole, part de temps de parole), un mot du personnage, 3 points à retenir avec la bonne forme, les mots du jour. Avec Max, Ibrahim ou Leo, s'il y a eu beaucoup d'erreurs, le bilan propose un bouton pour travailler ces points avec Emma.
-
-Pour le français, l'agent ElevenLabs doit avoir le français parmi ses langues, et les personnages utilisent de **vraies voix françaises** (accent de France) ajoutées à ton compte ElevenLabs depuis la bibliothèque. La page **Réglages** (ou le premier lancement d'une séance en français) règle tout ça automatiquement. Pour imposer une voix précise à un personnage : variable `ELEVENLABS_VOICE_FR_<MODE>` (voir `.env.example`).
+Les personnages se souviennent des sujets de vos dernières séances. Les notes de prononciation arrivent en V4.
 
 ## Mise en route (à faire une seule fois)
 
@@ -46,6 +31,12 @@ Si tu préfères le faire à la main : agent → **Security** → **Overrides** 
 - **ElevenLabs** : profil → **API Keys** → **Create API key**.
 - **Anthropic** (pour les mots du jour du bilan) : [console.anthropic.com](https://console.anthropic.com) → **API Keys** → **Create key**. Facultatif : sans elle, le bilan n'affiche pas les mots du jour.
 
+### 2 bis. La base de données (nouveau en V3)
+
+1. Va sur [supabase.com](https://supabase.com), crée un compte gratuit, puis **New project** (choisis un mot de passe de base de données et garde-le).
+2. Dans le projet, bouton **Connect** en haut → onglet **Transaction pooler** (ou « Session pooler ») → copie la chaîne qui commence par `postgresql://` et remplace `[YOUR-PASSWORD]` par ton mot de passe.
+3. Dans Vercel, ajoute cette chaîne sous le nom `DATABASE_URL`, puis Redeploy. Les tables se créent toutes seules à la première ouverture. La page **Réglages** indique « Base de données : Prête ».
+
 ### 3. Les variables dans Vercel (jamais dans le code)
 
 Vercel → ton projet → **Settings** → **Environment Variables** :
@@ -54,7 +45,9 @@ Vercel → ton projet → **Settings** → **Environment Variables** :
 | --- | --- |
 | `ELEVENLABS_API_KEY` | ta clé ElevenLabs |
 | `ELEVENLABS_AGENT_ID` | l'Agent ID |
-| `ANTHROPIC_API_KEY` | ta clé Anthropic (facultatif) |
+| `ANTHROPIC_API_KEY` | ta clé Anthropic (mots du jour, corrections, sujets, niveau) |
+| `DATABASE_URL` | la chaîne de connexion Supabase (carnet, suivi, niveau, rappels) |
+| `APP_PIN` | un code de ton choix pour protéger l'app (conseillé) |
 
 Coche les trois environnements. Après un ajout, relance un déploiement (**Deployments** → les trois points → **Redeploy**). Le fichier `.env.example` liste toutes les variables possibles.
 
@@ -65,14 +58,15 @@ Coche les trois environnements. Après un ajout, relance un déploiement (**Depl
 3. Choisis la langue, le personnage et un sujet, puis discute 10 minutes. Essaie **Répète**, **Vitesse**, **Correction** et **Texte**, et interromps le personnage en parlant pendant qu'il parle.
 4. Appuie sur **Terminer** et regarde le bilan.
 
-### 5. Ce que tu me dis ensuite
+### 5. Ce que tu me dis ensuite (après une semaine d'usage quotidien)
 
-- Une séance complète dans chaque mode, en anglais, puis au moins une en français : est-ce que chaque personnage a bien son caractère ?
-- En français, la voix est-elle agréable et compréhensible ?
-- Les sujets proposés te donnent-ils envie ? « Mon propre sujet » marche-t-il bien ?
-- Le changement de correction en pleine discussion : utile, ou gênant à cause de la petite reconnexion ?
+- Le test de niveau : le niveau affiché te semble-t-il juste ?
+- Le bilan et le texte corrigé : clairs, utiles, lisibles en 30 secondes ?
+- Le carnet : les mots reviennent-ils au bon moment ? La révision à la voix te plaît-elle ?
+- Les rappels : les as-tu reçus à la bonne heure ?
+- Le plafond et le coût estimé : cohérents avec ta facture ElevenLabs ? (ajuste le coût par minute dans Réglages)
 
-Quand tu valides la V2, on passe à la V3 (test de niveau, bilan complet, texte corrigé, carnet de mots, révisions, rappels, plafond de dépense).
+Quand tu valides la V3, on passe à la V4 (prononciation, shadowing, suivi des sons).
 
 ## Pour les développeurs
 
@@ -96,4 +90,7 @@ Structure :
 - `src/app/api/bilan/route.ts` : mots du jour et encouragement via Claude (Haiku par défaut).
 - `src/app/api/elevenlabs/agent/route.ts` et `/reglages` : état de l'agent ElevenLabs et réglage automatique (overrides, LLM Claude Haiku, variable `ELEVENLABS_AGENT_LLM` pour changer de modèle).
 - `src/lib/progress.ts` : série de jours et minutes du jour (stockage local, V1).
+- `src/lib/db.ts` : connexion Postgres et création automatique des tables (`settings`, `sessions`, `words`, `errors`). `src/lib/settings.ts` : niveau, coût, rappel.
+- `src/app/api/sessions`, `/api/mots`, `/api/niveau`, `/api/suivi`, `/api/reglages`, `/api/rappels` (+ `/envoyer` pour le cron de `vercel.json`), `/api/acces`.
+- `src/components/carnet.tsx`, `suivi.tsx`, `settings-v3.tsx`, `acces.tsx` : écrans V3. `src/proxy.ts` : code d'accès. `public/sw.js` : notifications.
 - `src/components/voice-test.tsx` et `/test-voix` : page de test des voix (V0).

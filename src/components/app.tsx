@@ -20,6 +20,9 @@ import { useLocalStorage } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
+import type { ReglagesState } from "@/app/api/reglages/route";
+import type { SessionKind, ReviewWord } from "@/lib/prompt";
+import { levelIsStale, type LevelInfo } from "@/lib/levels";
 
 /**
  * V2 — six personnalités, anglais et français, choix du sujet, niveau de
@@ -40,7 +43,12 @@ type SessionParams = {
   correction: CorrectionLevel;
   speed: SpeedKey;
   topic: TopicChoice;
+  kind: SessionKind;
+  reviewWords?: ReviewWord[];
 };
+
+const TEST_MAX_SECONDS = 330;
+const REVISION_STORAGE_KEY = "prof-langue:revision-words";
 
 const SPEED_KEY = "prof-langue:speed";
 const CONNECTION_KEY = "prof-langue:v0:connection";
@@ -101,6 +109,10 @@ function AppInner() {
   const [elapsed, setElapsed] = useState(0);
   const [bilan, setBilan] = useState<BilanResult | null>(null);
   const [bilanLoading, setBilanLoading] = useState(false);
+  const [remote, setRemote] = useState<ReglagesState | null>(null);
+  const [levelResult, setLevelResult] = useState<(LevelInfo & { error?: string }) | null>(null);
+  const [capPrompt, setCapPrompt] = useState<Partial<SessionParams> | null>(null);
+  const [savedCost, setSavedCost] = useState<number | null>(null);
   const [summary, setSummary] = useState<{
     seconds: number;
     userTurns: number;
@@ -134,12 +146,30 @@ function AppInner() {
   const orbRef = useRef<HTMLDivElement>(null);
   const transcriptBox = useRef<HTMLDivElement>(null);
   const startRef = useRef<(opts: StartOptions) => Promise<boolean>>(async () => false);
+  const finishRef = useRef<() => void>(() => {});
+  const autoFinishTimer = useRef<number | null>(null);
 
   type StartOptions = {
     params?: Partial<SessionParams>;
     context?: { resumeMessage: string };
     force?: ConnectionType;
   };
+
+  const refreshRemote = useCallback(() => {
+    fetch("/api/reglages")
+      .then(async (res) => (res.ok ? ((await res.json()) as ReglagesState) : null))
+      .then((data) => {
+        if (data) setRemote(data);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refreshRemote();
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
+    }
+  }, [refreshRemote]);
 
   const pushLine = useCallback((role: "user" | "agent", text: string) => {
     setTranscript((prev) => {
@@ -206,6 +236,10 @@ function AppInner() {
       }
       if (role === "user") userTurns.current += 1;
       pushLine(role, message);
+      if (role === "agent" && liveRef.current?.kind === "test" && /test (is|est) (finished|over|termin)|test is done|fin du test/i.test(message)) {
+        if (autoFinishTimer.current) window.clearTimeout(autoFinishTimer.current);
+        autoFinishTimer.current = window.setTimeout(() => finishRef.current(), 6000);
+      }
     },
     onModeChange: ({ mode }) => {
       const now = performance.now();
@@ -222,14 +256,20 @@ function AppInner() {
   const connected = status === "connected";
   const busy = preparing || status === "connecting";
 
-  // Chrono de la séance.
+  // Chrono de la séance, fin automatique du test de niveau.
   useEffect(() => {
     if (phase !== "live" || !connected) return;
     const id = setInterval(() => {
-      if (connectAt.current != null) setElapsed(Math.floor((performance.now() - connectAt.current) / 1000));
+      if (connectAt.current == null) return;
+      const secs = Math.floor((performance.now() - connectAt.current) / 1000);
+      setElapsed(secs);
+      if (liveRef.current?.kind === "test" && secs >= TEST_MAX_SECONDS) finishRef.current();
     }, 1000);
     return () => clearInterval(id);
   }, [phase, connected]);
+
+  // Plafond du jour (dérivé, pas d'état).
+  const capReached = Boolean(remote?.db) && remote != null && phase === "live" && remote.todayMinutes * 60 + elapsed >= remote.cost.dailyCapMinutes * 60;
 
   // L'avatar respire au rythme de la voix.
   useEffect(() => {
@@ -299,7 +339,7 @@ function AppInner() {
 
   const start = useCallback(
     async ({ params, context, force }: StartOptions) => {
-      const base: SessionParams = liveRef.current ?? { personality, language, correction, speed, topic: { title: null, own: true } };
+      const base: SessionParams = liveRef.current ?? { personality, language, correction, speed, topic: { title: null, own: true }, kind: "conversation" };
       const p: SessionParams = { ...base, ...params };
       liveRef.current = p;
       setLive(p);
@@ -334,6 +374,8 @@ function AppInner() {
             topic: p.topic.title,
             ownTopic: p.topic.own,
             memory: history.memoryFor(p.personality.id, p.personality.modeLabel),
+            kind: p.kind,
+            reviewWords: p.reviewWords,
             connectionType: type,
             context: context
               ? { resumeMessage: context.resumeMessage, transcript: transcriptRef.current.map((l) => ({ role: l.role, text: l.text })) }
@@ -377,16 +419,54 @@ function AppInner() {
   }, [start]);
 
   /** Lance une nouvelle séance (depuis le choix du sujet ou le bilan). */
-  const begin = useCallback(
+  const launch = useCallback(
     (params: Partial<SessionParams>) => {
       liveRef.current = null;
       setPhase("live");
       setBilan(null);
       setSummary(null);
+      setLevelResult(null);
+      setSavedCost(null);
       void start({ params });
     },
     [start],
   );
+
+  /** Lance une séance, après un avertissement si le plafond du jour est atteint. */
+  const begin = useCallback(
+    (params: Partial<SessionParams>) => {
+      if (remote && remote.db && remote.todayMinutes >= remote.cost.dailyCapMinutes) {
+        setCapPrompt(params);
+        return;
+      }
+      launch(params);
+    },
+    [remote, launch],
+  );
+
+  // Révision à la voix lancée depuis le carnet (/?start=revision).
+  const revisionChecked = useRef(false);
+  useEffect(() => {
+    if (revisionChecked.current) return;
+    revisionChecked.current = true;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("start") !== "revision") return;
+    window.history.replaceState(null, "", "/");
+    let words: ReviewWord[] = [];
+    try {
+      words = JSON.parse(sessionStorage.getItem(REVISION_STORAGE_KEY) ?? "[]") as ReviewWord[];
+    } catch {
+      words = [];
+    }
+    if (words.length === 0) return;
+    const lang: Language = params.get("lang") === "fr" ? "fr" : "en";
+    const prof = findPersonality("prof") ?? personality;
+    const id = window.setTimeout(
+      () => launch({ personality: prof, language: lang, correction: "legere", speed, topic: { title: null, own: false }, kind: "revision", reviewWords: words }),
+      50,
+    );
+    return () => window.clearTimeout(id);
+  }, [launch, personality, speed]);
 
   /** Change un réglage en pleine discussion : reconnexion et reprise. */
   const restart = useCallback(
@@ -478,31 +558,92 @@ function AppInner() {
     setPhase("bilan");
 
     const lines = transcriptRef.current;
+    const plain = lines.map((l) => ({ role: l.role, text: l.text }));
+    let result: BilanResult | null = null;
+    let level: (LevelInfo & { error?: string }) | null = null;
     if (lines.length >= 2 && p) {
       setBilanLoading(true);
       try {
-        const res = await fetch("/api/bilan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            transcript: lines.map((l) => ({ role: l.role, text: l.text })),
-            durationSeconds: seconds,
-            personality: p.personality.id,
-            language: p.language,
-          }),
-        });
-        if (res.ok) setBilan((await res.json()) as BilanResult);
+        if (p.kind === "test") {
+          const res = await fetch("/api/niveau", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transcript: plain, language: p.language }),
+          });
+          const data = (await res.json().catch(() => ({}))) as LevelInfo & { error?: string };
+          level = res.ok ? data : { level: "", date: "", summary: "", strengths: [], toWorkOn: [], error: data.error ?? "L'évaluation a échoué." };
+          setLevelResult(level);
+        } else {
+          const res = await fetch("/api/bilan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transcript: plain, durationSeconds: seconds, personality: p.personality.id, language: p.language }),
+          });
+          if (res.ok) {
+            result = (await res.json()) as BilanResult;
+            setBilan(result);
+          }
+        }
       } catch {
         // pas de bilan : l'écran reste utile sans
       } finally {
         setBilanLoading(false);
       }
     }
-  }, [connected, status, endSession, progress, history]);
+    if (p && seconds >= 20) {
+      try {
+        const res = await fetch("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: p.kind,
+            language: p.language,
+            personality: p.personality.id,
+            topic: p.topic.title,
+            seconds,
+            userTurns: userTurns.current,
+            userShare,
+            transcript: plain,
+            corrections: result?.corrections ?? [],
+            errors: result?.errors ?? [],
+            words: result?.words ?? [],
+            encouragement: result?.encouragement ?? null,
+            level: level?.level || null,
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { saved?: boolean; costFcfa?: number };
+        if (data.saved && typeof data.costFcfa === "number") setSavedCost(data.costFcfa);
+      } catch {
+        // la séance reste dans l'historique du téléphone
+      }
+      refreshRemote();
+    }
+  }, [connected, status, endSession, progress, history, refreshRemote]);
+
+  useEffect(() => {
+    finishRef.current = () => void finish();
+  }, [finish]);
+
+  const capSheet = capPrompt ? (
+    <CapSheet
+      todayMinutes={remote?.todayMinutes ?? 0}
+      capMinutes={remote?.cost.dailyCapMinutes ?? 30}
+      onContinue={() => {
+        const params = capPrompt;
+        setCapPrompt(null);
+        launch(params);
+      }}
+      onCancel={() => setCapPrompt(null)}
+    />
+  ) : null;
 
   if (phase === "home") {
+    const currentLevel = remote?.levels[language] ?? null;
+    const needsTest = Boolean(remote?.db) && levelIsStale(currentLevel);
     return (
-      <HomeScreen
+      <>
+        {capSheet}
+        <HomeScreen
         language={language}
         onLanguageChange={setSavedLanguage}
         personality={personality}
@@ -515,42 +656,60 @@ function AppInner() {
         minutesToday={progress.minutesToday}
         goalMinutes={progress.goalMinutes}
         onStart={() => setPhase("topic")}
+        level={currentLevel?.level ?? null}
+        needsTest={needsTest}
+        onTest={() =>
+          begin({ personality: findPersonality("prof") ?? personality, language, correction: "aucune", speed, topic: { title: null, own: false }, kind: "test" })
+        }
+        dueWords={remote?.dueWords ?? 0}
+        dbReady={Boolean(remote?.db)}
       />
+      </>
     );
   }
 
   if (phase === "topic") {
     return (
-      <TopicScreen
+      <>
+        {capSheet}
+        <TopicScreen
         personality={personality}
         language={language}
         recent={history.recentTopics(personality.id, language)}
         onBack={() => setPhase("home")}
-        onPick={(topic) => begin({ personality, language, correction, speed, topic })}
+        onPick={(topic) => begin({ personality, language, correction, speed, topic, kind: "conversation" })}
       />
+      </>
     );
   }
 
   if (phase === "bilan") {
     return (
-      <BilanScreen
+      <>
+        {capSheet}
+        <BilanScreen
         summary={summary}
         bilan={bilan}
         loading={bilanLoading}
         personality={live?.personality ?? personality}
         language={live?.language ?? language}
+        kind={live?.kind ?? "conversation"}
+        levelResult={levelResult}
+        transcript={transcript}
+        costFcfa={savedCost}
         onAgain={() => setPhase("topic")}
         onHome={() => setPhase("home")}
         onTeacher={(focus) => {
           const prof = findPersonality("prof") ?? personality;
           setSavedMode(prof.id);
-          begin({ personality: prof, language: live?.language ?? language, correction: "active", speed, topic: { title: focus, own: false } });
+          begin({ personality: prof, language: live?.language ?? language, correction: "active", speed, topic: { title: focus, own: false }, kind: "conversation" });
         }}
       />
+      </>
     );
   }
 
-  const p = live ?? { personality, language, correction, speed, topic: { title: null, own: true } };
+  const p = live ?? { personality, language, correction, speed, topic: { title: null, own: true }, kind: "conversation" as SessionKind };
   const displayName = p.personality.id === "situation" ? "Ton partenaire" : p.personality.name;
 
   const statusLabel = error
@@ -582,7 +741,7 @@ function AppInner() {
           <div className="flex flex-col">
             <span className="text-base font-bold">{displayName}</span>
             <span className="text-xs text-muted">
-              {p.personality.modeLabel} · {LANGUAGE_LABELS[p.language].toLowerCase()}
+              {p.kind === "test" ? "Test de niveau" : p.kind === "revision" ? "Révision de vocabulaire" : p.personality.modeLabel} · {LANGUAGE_LABELS[p.language].toLowerCase()}
               {p.topic.title ? ` · ${p.topic.title}` : ""}
             </span>
           </div>
@@ -595,6 +754,11 @@ function AppInner() {
         </div>
       </header>
 
+      {capReached && (
+        <p className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening">
+          Plafond du jour atteint ({remote?.cost.dailyCapMinutes ?? 30} min). Tu peux terminer quand tu veux.
+        </p>
+      )}
       <section className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
         <div
           ref={orbRef}
@@ -801,6 +965,11 @@ function HomeScreen({
   minutesToday,
   goalMinutes,
   onStart,
+  level,
+  needsTest,
+  onTest,
+  dueWords,
+  dbReady,
 }: {
   language: Language;
   onLanguageChange: (l: Language) => void;
@@ -814,6 +983,11 @@ function HomeScreen({
   minutesToday: number;
   goalMinutes: number;
   onStart: () => void;
+  level: string | null;
+  needsTest: boolean;
+  onTest: () => void;
+  dueWords: number;
+  dbReady: boolean;
 }) {
   const today = useToday();
   const dateLabel = today ? today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) : "";
@@ -849,6 +1023,37 @@ function HomeScreen({
           <div className="h-2 rounded-full bg-accent transition-all" style={{ width: `${Math.max(4, pct)}%` }} />
         </div>
       </section>
+
+      {dbReady && (needsTest || dueWords > 0) && (
+        <section className="flex flex-col gap-2">
+          {needsTest && (
+            <button
+              type="button"
+              onClick={onTest}
+              className="flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-accent-soft px-4 py-3 text-left"
+            >
+              <span className="flex flex-col">
+                <span className="text-sm font-semibold">{level ? `Refaire le test de niveau (${LANGUAGE_LABELS[language].toLowerCase()})` : `Test de niveau en ${LANGUAGE_LABELS[language].toLowerCase()}`}</span>
+                <span className="text-xs text-muted">{level ? `Niveau actuel ${level}, à réévaluer ce mois-ci. 5 minutes avec Emma.` : "5 minutes de discussion avec Emma pour situer ton niveau (A1 à C2)."}</span>
+              </span>
+              <span className="rounded-full bg-accent px-3 py-1.5 text-xs font-bold text-accent-contrast">5 min</span>
+            </button>
+          )}
+          {dueWords > 0 && (
+            <Link href="/carnet" className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-elevated px-4 py-3">
+              <span className="flex flex-col">
+                <span className="text-sm font-semibold">
+                  {dueWords} mot{dueWords > 1 ? "s" : ""} à réviser
+                </span>
+                <span className="text-xs text-muted">Deux minutes dans le carnet, ou une révision à la voix avec Emma.</span>
+              </span>
+              <span className="text-xl text-muted" aria-hidden>
+                ›
+              </span>
+            </Link>
+          )}
+        </section>
+      )}
 
       <section className="flex flex-col gap-2">
         <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-line bg-elevated p-1" role="radiogroup" aria-label="Langue">
@@ -951,12 +1156,49 @@ function HomeScreen({
         </svg>
         Commencer
       </button>
-      <p className="text-center text-xs text-muted">
+      <nav className="flex items-center justify-center gap-4 text-xs text-muted" aria-label="Autres écrans">
+        <Link href="/carnet" className="underline">
+          Carnet{dueWords > 0 ? ` (${dueWords})` : ""}
+        </Link>
+        <Link href="/suivi" className="underline">
+          Suivi{level ? ` · ${level}` : ""}
+        </Link>
         <Link href="/reglages" className="underline">
           Réglages
         </Link>
-      </p>
+      </nav>
     </main>
+  );
+}
+
+function CapSheet({
+  todayMinutes,
+  capMinutes,
+  onContinue,
+  onCancel,
+}: {
+  todayMinutes: number;
+  capMinutes: number;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-20 flex items-end justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="cap-title">
+      <div className="flex w-full max-w-md flex-col gap-3 rounded-3xl border border-line bg-elevated p-5">
+        <h2 id="cap-title" className="text-lg font-bold">
+          Plafond du jour atteint
+        </h2>
+        <p className="text-sm text-muted">
+          Tu as déjà parlé {todayMinutes} min aujourd&apos;hui, pour un plafond de {capMinutes} min. Continuer coûtera des minutes ElevenLabs en plus. Le plafond se règle dans Réglages.
+        </p>
+        <button type="button" onClick={onContinue} className="h-12 rounded-2xl bg-accent text-sm font-bold text-accent-contrast">
+          Continuer quand même
+        </button>
+        <button type="button" onClick={onCancel} className="h-12 rounded-2xl border border-line text-sm font-semibold">
+          Arrêter pour aujourd&apos;hui
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1074,6 +1316,10 @@ function BilanScreen({
   loading,
   personality,
   language,
+  kind,
+  levelResult,
+  transcript,
+  costFcfa,
   onAgain,
   onHome,
   onTeacher,
@@ -1083,10 +1329,15 @@ function BilanScreen({
   loading: boolean;
   personality: Personality;
   language: Language;
+  kind: SessionKind;
+  levelResult: (LevelInfo & { error?: string }) | null;
+  transcript: TranscriptLine[];
+  costFcfa: number | null;
   onAgain: () => void;
   onHome: () => void;
   onTeacher: (focus: string) => void;
 }) {
+  const [showCorrected, setShowCorrected] = useState(false);
   const minutes = summary ? Math.round(summary.seconds / 60) : 0;
   const tooShort = !summary || summary.seconds < 30;
   const displayName = personality.id === "situation" ? "Ton partenaire" : personality.name;
@@ -1109,7 +1360,7 @@ function BilanScreen({
             <path d="M20 6 9 17l-5-5" />
           </svg>
         </div>
-        <h1 className="text-2xl font-bold">{tooShort ? "Séance éclair" : "Bien joué, Cherif !"}</h1>
+        <h1 className="text-2xl font-bold">{kind === "test" ? "Test terminé" : tooShort ? "Séance éclair" : "Bien joué, Cherif !"}</h1>
         <p className="text-sm text-muted">
           {summary?.goalReached
             ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
@@ -1125,10 +1376,41 @@ function BilanScreen({
         <Tile value={`${summary?.userShare ?? 0} %`} label="du temps de parole à toi" />
       </section>
 
-      <section className="flex items-center gap-3 rounded-2xl border border-line bg-elevated p-3">
-        <PersonaAvatar style={personality.avatar} size={56} label={displayName} />
-        <p className="text-sm leading-snug">{encouragement}</p>
-      </section>
+      {kind === "test" && (
+        <section className="flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent-soft p-4">
+          {loading ? (
+            <p className="text-sm text-muted">Emma évalue ton niveau…</p>
+          ) : levelResult?.error ? (
+            <p className="text-sm text-danger">{levelResult.error}</p>
+          ) : levelResult ? (
+            <>
+              <div className="flex items-center gap-3">
+                <span className="rounded-2xl bg-accent px-4 py-2 font-mono text-3xl font-bold text-accent-contrast">{levelResult.level}</span>
+                <span className="text-sm font-semibold">Ton niveau en {LANGUAGE_LABELS[language].toLowerCase()}</span>
+              </div>
+              {levelResult.summary && <p className="text-sm">{levelResult.summary}</p>}
+              {levelResult.strengths.length > 0 && (
+                <p className="text-xs text-muted">
+                  <strong>Points forts :</strong> {levelResult.strengths.join(" · ")}
+                </p>
+              )}
+              {levelResult.toWorkOn.length > 0 && (
+                <p className="text-xs text-muted">
+                  <strong>À travailler :</strong> {levelResult.toWorkOn.join(" · ")}
+                </p>
+              )}
+              <p className="text-xs text-muted">Les personnages adaptent maintenant leur vocabulaire à ce niveau. Le test se refait tous les mois.</p>
+            </>
+          ) : null}
+        </section>
+      )}
+
+      {kind !== "test" && (
+        <section className="flex items-center gap-3 rounded-2xl border border-line bg-elevated p-3">
+          <PersonaAvatar style={personality.avatar} size={56} label={displayName} />
+          <p className="text-sm leading-snug">{encouragement}</p>
+        </section>
+      )}
 
       {showTeacher && bilan?.teacherFocus && (
         <section className="flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent-soft p-4">
@@ -1178,8 +1460,34 @@ function BilanScreen({
             ) : (
               <p className="text-sm text-muted">Pas assez de discussion pour relever des mots cette fois.</p>
             )}
-            <p className="mt-auto pt-2 text-xs text-muted">Le carnet de mots avec révisions et le texte corrigé arrivent en V3.</p>
+            {costFcfa != null && (
+              <p className="mt-auto pt-2 text-xs text-muted">
+                Mots ajoutés au carnet. Coût estimé de la séance : ≈ {costFcfa} FCFA.
+              </p>
+            )}
           </section>
+
+          {transcript.length > 0 && kind !== "test" && (
+            <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+              <button type="button" onClick={() => setShowCorrected((v) => !v)} aria-expanded={showCorrected} className="flex items-center justify-between text-left text-sm font-semibold">
+                <span>Texte de la séance{bilan && bilan.corrections.length > 0 ? ` · ${bilan.corrections.length} correction${bilan.corrections.length > 1 ? "s" : ""}` : ""}</span>
+                <span className="text-muted">{showCorrected ? "Masquer" : "Voir"}</span>
+              </button>
+              {showCorrected && (
+                <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+                  {transcript.map((line, i) => {
+                    const fix = bilan?.corrections.find((c) => c.index === i);
+                    return (
+                      <div key={line.id} className={`flex max-w-[92%] flex-col gap-1 rounded-2xl px-3 py-2 text-sm ${line.role === "user" ? "self-end bg-accent-soft" : "self-start bg-bg"}`}>
+                        <span className={fix ? "text-muted line-through" : ""}>{line.text}</span>
+                        {fix && <span className="font-semibold text-speaking">{fix.corrected}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
         </>
       )}
 
