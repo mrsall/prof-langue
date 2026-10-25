@@ -23,6 +23,8 @@ export type BilanResult = {
   errors: { wrong: string; right: string; tip: string }[];
   /** Lignes de Cherif à corriger : index dans le texte envoyé, version corrigée. */
   corrections: { index: number; corrected: string }[];
+  /** Mots vagues ou maladroits qu'il a utilisés, et la version plus précise. */
+  upgrades: { used: string; better: string; why: string }[];
   encouragement: string | null;
   suggestTeacher: boolean;
   teacherFocus: string | null;
@@ -31,7 +33,7 @@ export type BilanResult = {
 const DEFAULT_MODEL = "claude-haiku-5-5";
 
 function emptyBilan(available: boolean): BilanResult {
-  return { available, words: [], errors: [], corrections: [], encouragement: null, suggestTeacher: false, teacherFocus: null };
+  return { available, words: [], errors: [], corrections: [], upgrades: [], encouragement: null, suggestTeacher: false, teacherFocus: null };
 }
 
 function systemPrompt(language: Language, name: string, recapHint: string | undefined) {
@@ -39,11 +41,12 @@ function systemPrompt(language: Language, name: string, recapHint: string | unde
   return `You help Cherif, a French speaker from Senegal, improve his spoken ${target}. You receive the transcript of a spoken conversation between Cherif and ${name}.
 
 Return ONLY a JSON object, no prose, no code fences, with this exact shape:
-{"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"encouragement":"...","suggestTeacher":false,"teacherFocus":"..."}
+{"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"upgrades":[{"used":"...","better":"...","why":"..."}],"encouragement":"...","suggestTeacher":false,"teacherFocus":"..."}
 
 - "words": 3 to 5 useful ${target} words or short expressions from the conversation (ones ${name} introduced, ones Cherif asked for, or correct forms he can reuse). The key "en" holds the ${target} form, "fr" a short French translation or explanation. Beginner-friendly. No duplicates.
 - "errors": up to 3 of Cherif's most useful mistakes to fix (grammar, vocabulary, word order), each with "wrong" (what he said), "right" (the correct form) and "tip" (one short sentence in French explaining the rule). Empty array if none. Never about accent or pronunciation (you only see text).
 - "corrections": for each of Cherif's lines that contains a real mistake, its number (the [N] shown in the transcript) and the whole line rewritten correctly in natural ${target}, keeping his meaning and words as much as possible. Skip lines that are fine. At most 12 items. Speech-to-text glitches (missing punctuation, a misheard word that is obviously the transcriber's fault) are not mistakes.
+- "upgrades": up to 3 places where Cherif used a vague, repetitive or clumsy word or phrase (thing, stuff, do, nice, very good, truc, chose, faire...) or struggled to express an idea: "used" (what he said), "better" (the precise ${target} word or phrase he was looking for, or a clearer way to say his idea), "why" (one short sentence in French: when to use it). This is his main difficulty, so make these useful.
 - "encouragement": one or two sentences in ${target}, in ${name}'s own voice and tone, pointing to one precise thing Cherif did well. Never mention mistakes, errors or accent.
 - "suggestTeacher": true only if there were many mistakes (roughly 4 or more clear recurring ones) and a lesson with a teacher would help.
 - "teacherFocus": if suggestTeacher is true, a short French phrase naming the 1 or 2 points to work on (e.g. "le passé et les questions"), else null.
@@ -68,6 +71,12 @@ function parseResult(text: string): BilanResult {
           .filter((c): c is { index: number; corrected: string } => typeof c === "object" && c !== null && typeof (c as { index?: unknown }).index === "number" && isStr((c as { corrected?: unknown }).corrected))
           .slice(0, 12)
       : [];
+    const upgrades = Array.isArray(parsed.upgrades)
+      ? parsed.upgrades
+          .filter((u): u is { used: string; better: string; why: string } => typeof u === "object" && u !== null && isStr((u as { used?: unknown }).used) && isStr((u as { better?: unknown }).better))
+          .map((u) => ({ used: u.used, better: u.better, why: isStr(u.why) ? u.why : "" }))
+          .slice(0, 3)
+      : [];
     const errors = Array.isArray(parsed.errors)
       ? parsed.errors
           .filter(
@@ -82,6 +91,7 @@ function parseResult(text: string): BilanResult {
       words,
       errors,
       corrections,
+      upgrades,
       encouragement: isStr(parsed.encouragement) ? parsed.encouragement : null,
       suggestTeacher: parsed.suggestTeacher === true,
       teacherFocus: isStr(parsed.teacherFocus) ? parsed.teacherFocus : null,
