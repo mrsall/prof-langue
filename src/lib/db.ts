@@ -19,7 +19,7 @@ export function dbAvailable() {
  */
 export function normalizeDatabaseUrl(raw: string) {
   let url = raw.trim().replace(/^["']|["']$/g, "");
-  const m = url.match(/^(postgres(?:ql)?:\/\/)([^:\/@]+):(.*)@([^@]+)$/s);
+  const m = url.match(/^(postgres(?:ql)?:\/\/)([^:\/@]+):(.*)@([^@]+)$/);
   if (m) {
     const [, scheme, user, password, rest] = m;
     let decoded = password;
