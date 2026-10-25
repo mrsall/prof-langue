@@ -3,6 +3,8 @@ import { findPersonality, isLanguage, pickFirstMessage, type Language } from "@/
 import { isSpeedKey, speedValue } from "@/config/speeds";
 import { isCorrectionLevel } from "@/config/correction";
 import { buildPrompt, type MemoryItem, type TranscriptLine } from "@/lib/prompt";
+import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
+import { PERSONALITIES } from "@/config/personalities";
 
 /**
  * Crée les identifiants d'une conversation ElevenLabs Agents et prépare les
@@ -107,6 +109,19 @@ export async function POST(request: Request) {
   const overrides: SessionOverrides = {};
   const tts: NonNullable<SessionOverrides["tts"]> = {};
   if (!dedicatedAgentId) tts.voiceId = voice.voiceId;
+  if (language === "fr" && personality) {
+    // En français, une vraie voix française (accent de France) plutôt qu'une
+    // voix anglaise qui lit du français.
+    try {
+      const frenchVoices = await listFrenchVoices(apiKey);
+      const index = Math.max(0, PERSONALITIES.findIndex((p) => p.id === personality.id));
+      const gender = voice.gender === "femme" ? "female" : "male";
+      const frVoice = pickFrenchVoice(frenchVoices, personality.id, gender, index);
+      if (frVoice) tts.voiceId = frVoice;
+    } catch (error) {
+      console.error("Voix françaises indisponibles, voix par défaut utilisée", error);
+    }
+  }
   if (isSpeedKey(body.speed) && body.speed !== "normal") tts.speed = speedValue(body.speed);
   if (Object.keys(tts).length > 0) overrides.tts = tts;
 

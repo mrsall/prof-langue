@@ -29,7 +29,7 @@ Pendant la discussion :
 
 **Terminer** : bilan de la séance (minutes, prises de parole, part de temps de parole), un mot du personnage, 3 points à retenir avec la bonne forme, les mots du jour. Avec Max, Ibrahim ou Leo, s'il y a eu beaucoup d'erreurs, le bilan propose un bouton pour travailler ces points avec Emma.
 
-Pour le français, l'agent ElevenLabs doit avoir le français parmi ses langues et une voix multilingue : la page **Réglages** (ou le premier lancement d'une séance) règle ça automatiquement.
+Pour le français, l'agent ElevenLabs doit avoir le français parmi ses langues, et les personnages utilisent de **vraies voix françaises** (accent de France) ajoutées à ton compte ElevenLabs depuis la bibliothèque. La page **Réglages** (ou le premier lancement d'une séance en français) règle tout ça automatiquement. Pour imposer une voix précise à un personnage : variable `ELEVENLABS_VOICE_FR_<MODE>` (voir `.env.example`).
 
 ## Mise en route (à faire une seule fois)
 
