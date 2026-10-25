@@ -1,16 +1,19 @@
 /**
  * Réglage automatique de l'agent ElevenLabs, pour éviter les clics dans le
  * dashboard : autorise les overrides dont l'app a besoin (consignes, première
- * phrase, voix, vitesse) et choisit un modèle Claude Haiku comme cerveau.
+ * phrase, langue, voix, vitesse), ajoute le français aux langues de l'agent,
+ * passe sur un modèle de voix multilingue et choisit Claude Haiku.
  *
  * GET  : état actuel (sans rien changer).
  * POST : applique les réglages. Idempotent : refaire n'abîme rien.
  */
 const AGENTS_API = "https://api.elevenlabs.io/v1/convai/agents";
 const TARGET_LLM = process.env.ELEVENLABS_AGENT_LLM || "claude-haiku-5-5";
+const MULTILINGUAL_TTS = process.env.ELEVENLABS_TTS_MODEL || "eleven_flash_v2_5";
+const ENGLISH_ONLY_TTS = new Set(["eleven_turbo_v2", "eleven_flash_v2"]);
 
 type OverrideFlags = {
-  agent?: { first_message?: boolean; prompt?: { prompt?: boolean } };
+  agent?: { first_message?: boolean; language?: boolean; prompt?: { prompt?: boolean } };
   tts?: { voice_id?: boolean; speed?: boolean };
 };
 
@@ -19,6 +22,8 @@ type Agent = {
   name?: string;
   conversation_config?: {
     agent?: { prompt?: Record<string, unknown> & { llm?: string } };
+    tts?: Record<string, unknown> & { model_id?: string };
+    language_presets?: Record<string, unknown>;
   };
   platform_settings?: {
     overrides?: { conversation_config_override?: OverrideFlags } & Record<string, unknown>;
@@ -30,14 +35,15 @@ export type AgentStatus = {
   name: string | null;
   llm: string | null;
   llmOk: boolean;
-  overrides: { prompt: boolean; firstMessage: boolean; voiceId: boolean; speed: boolean };
+  ttsModel: string | null;
+  ttsMultilingual: boolean;
+  frenchReady: boolean;
+  overrides: { prompt: boolean; firstMessage: boolean; language: boolean; voiceId: boolean; speed: boolean };
   ok: boolean;
 };
 
 function env() {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  const agentId = process.env.ELEVENLABS_AGENT_ID;
-  return { apiKey, agentId };
+  return { apiKey: process.env.ELEVENLABS_API_KEY, agentId: process.env.ELEVENLABS_AGENT_ID };
 }
 
 function missing(variable: string) {
@@ -69,20 +75,35 @@ async function fetchAgent(apiKey: string, agentId: string) {
 function statusOf(agent: Agent): AgentStatus {
   const flags = agent.platform_settings?.overrides?.conversation_config_override ?? {};
   const llm = agent.conversation_config?.agent?.prompt?.llm ?? null;
+  const ttsModel = agent.conversation_config?.tts?.model_id ?? null;
   const overrides = {
     prompt: Boolean(flags.agent?.prompt?.prompt),
     firstMessage: Boolean(flags.agent?.first_message),
+    language: Boolean(flags.agent?.language),
     voiceId: Boolean(flags.tts?.voice_id),
     speed: Boolean(flags.tts?.speed),
   };
   const llmOk = typeof llm === "string" && llm.startsWith("claude");
+  const ttsMultilingual = typeof ttsModel === "string" && !ENGLISH_ONLY_TTS.has(ttsModel);
+  const frenchReady = Boolean(agent.conversation_config?.language_presets && "fr" in agent.conversation_config.language_presets);
   return {
     configured: true,
     name: agent.name ?? null,
     llm,
     llmOk,
+    ttsModel,
+    ttsMultilingual,
+    frenchReady,
     overrides,
-    ok: llmOk && overrides.prompt && overrides.firstMessage && overrides.voiceId && overrides.speed,
+    ok:
+      llmOk &&
+      ttsMultilingual &&
+      frenchReady &&
+      overrides.prompt &&
+      overrides.firstMessage &&
+      overrides.language &&
+      overrides.voiceId &&
+      overrides.speed,
   };
 }
 
@@ -107,12 +128,21 @@ export async function POST() {
     const currentOverrides = current.platform_settings?.overrides ?? {};
     const currentFlags = currentOverrides.conversation_config_override ?? {};
     const currentPrompt = current.conversation_config?.agent?.prompt ?? {};
+    const currentTts = current.conversation_config?.tts ?? {};
+    const currentPresets = current.conversation_config?.language_presets ?? {};
+    const ttsModel =
+      typeof currentTts.model_id === "string" && !ENGLISH_ONLY_TTS.has(currentTts.model_id)
+        ? currentTts.model_id
+        : MULTILINGUAL_TTS;
 
     // On repart de l'existant pour ne rien effacer d'autre.
     const body = {
       conversation_config: {
-        agent: {
-          prompt: { ...currentPrompt, llm: TARGET_LLM },
+        agent: { prompt: { ...currentPrompt, llm: TARGET_LLM } },
+        tts: { ...currentTts, model_id: ttsModel },
+        language_presets: {
+          ...currentPresets,
+          fr: currentPresets.fr ?? { overrides: { agent: { language: "fr" } } },
         },
       },
       platform_settings: {
@@ -123,6 +153,7 @@ export async function POST() {
             agent: {
               ...(currentFlags.agent ?? {}),
               first_message: true,
+              language: true,
               prompt: { ...(currentFlags.agent?.prompt ?? {}), prompt: true },
             },
             tts: { ...(currentFlags.tts ?? {}), voice_id: true, speed: true },

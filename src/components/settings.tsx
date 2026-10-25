@@ -90,6 +90,9 @@ export function Settings() {
             <Row ok={s.llmOk} label={`Cerveau : ${s.llm ?? "inconnu"}${s.llmOk ? "" : " (Claude Haiku conseillé)"}`} />
             <Row ok={s.overrides.prompt} label="Consignes de Max envoyées par l'app" />
             <Row ok={s.overrides.firstMessage} label="Première phrase envoyée par l'app" />
+            <Row ok={s.overrides.language} label="Langue choisie par l'app (anglais ou français)" />
+            <Row ok={s.frenchReady} label="Français ajouté aux langues de l'agent" />
+            <Row ok={s.ttsMultilingual} label={`Voix multilingue${s.ttsModel ? ` (${s.ttsModel})` : ""}`} />
             <Row ok={s.overrides.voiceId} label="Voix choisie par l'app" />
             <Row ok={s.overrides.speed} label="Vitesse choisie par l'app" />
           </ul>
@@ -107,7 +110,7 @@ export function Settings() {
         )}
         {done && s?.ok && <p className="text-sm text-speaking">C&apos;est réglé. Tu peux lancer une séance avec Max.</p>}
         <p className="text-xs text-muted">
-          Ce bouton autorise l&apos;agent à recevoir les consignes, la première phrase, la voix et la vitesse depuis l&apos;app, et choisit Claude Haiku comme cerveau. Il ne touche à rien d&apos;autre.
+          Ce bouton autorise l&apos;agent à recevoir les consignes, la première phrase, la langue, la voix et la vitesse depuis l&apos;app, ajoute le français, passe sur une voix multilingue et choisit Claude Haiku comme cerveau. Il ne touche à rien d&apos;autre.
         </p>
       </section>
 

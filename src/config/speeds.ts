@@ -20,8 +20,15 @@ export function isSpeedKey(v: unknown): v is SpeedKey {
 }
 
 /** Phrase de reprise quand on change la vitesse en pleine discussion. */
-export const SPEED_RESUME_MESSAGES: Record<SpeedKey, string> = {
-  lent: "Alright, I'll slow down a bit. So, where were we?",
-  normal: "Okay, back to normal speed. Where were we?",
-  rapide: "Okay, a bit faster then! So, where were we?",
+export const SPEED_RESUME_MESSAGES: Record<"en" | "fr", Record<SpeedKey, string>> = {
+  en: {
+    lent: "Alright, I'll slow down a bit. So, where were we?",
+    normal: "Okay, back to normal speed. Where were we?",
+    rapide: "Okay, a bit faster then! So, where were we?",
+  },
+  fr: {
+    lent: "D'accord, je ralentis un peu. Alors, où en étions-nous ?",
+    normal: "D'accord, je reprends une vitesse normale. Où en étions-nous ?",
+    rapide: "D'accord, un peu plus vite alors ! Où en étions-nous ?",
+  },
 };

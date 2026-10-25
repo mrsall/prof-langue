@@ -1,29 +1,35 @@
 import { findVoice } from "@/config/voices";
-import { findPersonality, pickFirstMessage } from "@/config/personalities";
+import { findPersonality, isLanguage, pickFirstMessage, type Language } from "@/config/personalities";
 import { isSpeedKey, speedValue } from "@/config/speeds";
+import { isCorrectionLevel } from "@/config/correction";
+import { buildPrompt, type MemoryItem, type TranscriptLine } from "@/lib/prompt";
 
 /**
  * Crée les identifiants d'une conversation ElevenLabs Agents et prépare les
- * consignes (personnalité, voix, vitesse) envoyées au début de la séance.
+ * consignes (personnalité, langue, correction, sujet, voix, vitesse) envoyées
+ * au début de la séance.
  *
  * La clé API ne quitte jamais le serveur : le téléphone reçoit seulement un
  * jeton WebRTC (ou une URL signée WebSocket) valable quelques minutes.
  */
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/convai/conversation";
 
-type TranscriptLine = { role: "user" | "agent"; text: string };
-
 type Body = {
   voice?: string;
   connectionType?: "webrtc" | "websocket";
   personality?: string;
+  language?: string;
+  correction?: string;
   speed?: string;
-  /** Reprise d'une discussion en cours (changement de vitesse, coupure). */
+  topic?: string | null;
+  ownTopic?: boolean;
+  memory?: MemoryItem[];
+  /** Reprise d'une discussion en cours (changement de réglage, coupure). */
   context?: { transcript?: TranscriptLine[]; resumeMessage?: string };
 };
 
 export type SessionOverrides = {
-  agent?: { prompt?: { prompt: string }; firstMessage?: string };
+  agent?: { prompt?: { prompt: string }; firstMessage?: string; language?: Language };
   tts?: { voiceId?: string; speed?: number };
 };
 
@@ -34,15 +40,6 @@ function configError(variable: string) {
     },
     { status: 500 },
   );
-}
-
-function buildContextBlock(transcript: TranscriptLine[]) {
-  const lines = transcript
-    .slice(-12)
-    .filter((l) => typeof l.text === "string" && l.text.trim())
-    .map((l) => `${l.role === "user" ? "Cherif" : "You"}: ${l.text.trim().slice(0, 300)}`);
-  if (lines.length === 0) return "";
-  return `\n\nThis conversation was interrupted for a second and is now resuming. Do not greet him again, do not restart the topic: continue naturally from here.\nConversation so far:\n${lines.join("\n")}`;
 }
 
 export async function POST(request: Request) {
@@ -66,6 +63,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "Voix inconnue." }, { status: 400 });
   }
 
+  const language: Language = isLanguage(body.language) ? body.language : "en";
+  const correction = isCorrectionLevel(body.correction) ? body.correction : (personality?.correction ?? "aucune");
+
   const connectionType: "webrtc" | "websocket" =
     body.connectionType === "websocket"
       ? "websocket"
@@ -76,8 +76,7 @@ export async function POST(request: Request) {
           : "webrtc";
 
   // Agent dédié à cette voix (optionnel), sinon agent commun + voix imposée.
-  const dedicatedAgentId =
-    process.env[`ELEVENLABS_AGENT_ID_${voice.key.toUpperCase()}`];
+  const dedicatedAgentId = process.env[`ELEVENLABS_AGENT_ID_${voice.key.toUpperCase()}`];
   const agentId = dedicatedAgentId || process.env.ELEVENLABS_AGENT_ID;
   if (!agentId) return configError("ELEVENLABS_AGENT_ID");
 
@@ -103,10 +102,7 @@ export async function POST(request: Request) {
     return Response.json({ error: hint }, { status: 502 });
   }
 
-  const data = (await upstream.json()) as {
-    token?: string;
-    signed_url?: string;
-  };
+  const data = (await upstream.json()) as { token?: string; signed_url?: string };
 
   const overrides: SessionOverrides = {};
   const tts: NonNullable<SessionOverrides["tts"]> = {};
@@ -115,11 +111,28 @@ export async function POST(request: Request) {
   if (Object.keys(tts).length > 0) overrides.tts = tts;
 
   if (personality) {
+    const topic = typeof body.topic === "string" && body.topic.trim() ? body.topic.trim().slice(0, 200) : null;
+    const ownTopic = Boolean(body.ownTopic) || !topic;
+    const memory = Array.isArray(body.memory)
+      ? body.memory
+          .filter((m) => m && typeof m.date === "string" && typeof m.mode === "string" && typeof m.topic === "string")
+          .slice(0, 5)
+      : [];
     const context = body.context;
-    const prompt = personality.prompt + buildContextBlock(context?.transcript ?? []);
+    const prompt = buildPrompt({
+      personality,
+      language,
+      correction,
+      topic,
+      ownTopic,
+      memory,
+      context: context?.transcript,
+    });
     const firstMessage =
-      context?.resumeMessage?.trim() || pickFirstMessage(personality);
+      context?.resumeMessage?.trim() ||
+      (ownTopic ? personality.ownTopicMessages[language] : pickFirstMessage(personality, language, topic ?? ""));
     overrides.agent = { prompt: { prompt }, firstMessage };
+    if (language !== "en") overrides.agent.language = language;
   }
 
   return Response.json({

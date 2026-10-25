@@ -133,17 +133,17 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 ## Questions ouvertes
 
 - ~~Voix retenue (choix en V0).~~ Réglé : **George** (britannique, homme, `JBFqnCBsobJjWmhhKeHm`).
-- Prénoms et caractère détaillé de chaque personnalité.
+- ~~Prénoms et caractère détaillé de chaque personnalité.~~ Proposés en V2 : Max (ami), Ibrahim (grand frère), Leo (débatteur), Emma (prof), Thomas (collègue), rôle de situation. À confirmer par Cherif.
 - Plafond de dépense quotidien.
 - Heure du rappel quotidien.
 
 ## État du projet
 
-- **V0 validée par Cherif (24 oct. 2026)**, fusionnée dans `main`. Voix retenue : **George**. Délai moyen sous 2 s, interruption OK. Page conservée sur `/test-voix`.
-- **V1 construite, en attente de validation par Cherif.** Maquette validée (Max = le pote).
-  - `src/components/app.tsx` : accueil (série, objectif 10 min, vitesse), conversation (mains libres par défaut ou appui pour parler via `micMuted`, choix sur l'accueil et en séance ; Répète, Vitesse avec reconnexion et reprise du contexte, Texte, Terminer), fin de séance (minutes, prises de parole, part de parole, mots du jour, encouragement).
-  - Config : `src/config/personalities.ts` (Max, consignes en anglais), `src/config/speeds.ts`, `src/config/voices.ts`.
-  - Serveur : `src/app/api/elevenlabs/session/route.ts` renvoie le jeton et les overrides (prompt, first message, voix, vitesse) ; `src/app/api/bilan/route.ts` appelle Claude (`ANTHROPIC_MODEL`, défaut `claude-haiku-5-5`).
-  - Progression (série, minutes du jour) en localStorage jusqu'à la V3.
-  - Page `/reglages` : bouton qui configure l'agent ElevenLabs par l'API (overrides System prompt, First message, Voice ID, Speed ; LLM `claude-haiku-5-5`, variable `ELEVENLABS_AGENT_LLM`). Le projet Vercel de Cherif n'est pas accessible depuis la session Claude (autre compte).
-- Prochaine étape : Cherif teste 10 minutes sans bug sur téléphone. Ensuite V2.
+- **V0 validée (24 oct. 2026)** : voix George, délai sous 2 s, interruption OK. Page conservée sur `/test-voix`.
+- **V1 validée (25 oct. 2026)** : mode ami avec Max, mains libres par défaut (appui pour parler en option), Répète, vitesse, bilan simple, page `/reglages` qui configure l'agent ElevenLabs par l'API.
+- **V2 construite, en attente de validation par Cherif.**
+  - Six personnalités dans `src/config/personalities.ts` (caractère et consignes EN/FR, avatar, voix, correction par défaut). Règles communes, niveaux de correction et souvenirs assemblés dans `src/lib/prompt.ts`.
+  - `src/components/app.tsx` : accueil (langue, mode, micro, vitesse) → sujet (`/api/sujets` via Claude, secours dans `src/config/topics.ts`, mon propre sujet, surprends-moi) → conversation (Répète, Vitesse, Correction, Texte, mains libres ou appui) → bilan (`/api/bilan` : points à retenir, mots du jour, encouragement, proposition de séance prof).
+  - Français : override de langue + préréglage `fr` + voix multilingue, appliqués par `/api/elevenlabs/agent` (page Réglages ou automatiquement au lancement).
+  - Historique des séances et progression en localStorage jusqu'à la V3.
+- Prochaine étape : Cherif fait une séance complète dans chaque mode (EN puis FR). Ensuite V3.
