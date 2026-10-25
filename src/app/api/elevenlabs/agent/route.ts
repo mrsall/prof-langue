@@ -14,18 +14,22 @@ const AGENTS_API = "https://api.elevenlabs.io/v1/convai/agents";
 const TARGET_LLM = process.env.ELEVENLABS_AGENT_LLM || "claude-haiku-5-5";
 const MULTILINGUAL_TTS = process.env.ELEVENLABS_TTS_MODEL || "eleven_flash_v2_5";
 const ENGLISH_ONLY_TTS = new Set(["eleven_turbo_v2", "eleven_flash_v2"]);
+/** Voix du juge en anglais (Daniel, britannique, posé). */
+const JUDGE_VOICE_EN = process.env.ELEVENLABS_VOICE_JUDGE_EN || "onwK4e9ZLuTAKqWW03F9";
 
 type OverrideFlags = {
   agent?: { first_message?: boolean; language?: boolean; prompt?: { prompt?: boolean } };
   tts?: { voice_id?: boolean; speed?: boolean };
 };
 
+type SupportedVoice = { label: string; voice_id: string; description?: string; language?: string };
+
 type Agent = {
   agent_id?: string;
   name?: string;
   conversation_config?: {
     agent?: { prompt?: Record<string, unknown> & { llm?: string } };
-    tts?: Record<string, unknown> & { model_id?: string };
+    tts?: Record<string, unknown> & { model_id?: string; supported_voices?: SupportedVoice[] };
     language_presets?: Record<string, unknown>;
   };
   platform_settings?: {
@@ -41,6 +45,7 @@ export type AgentStatus = {
   ttsModel: string | null;
   ttsMultilingual: boolean;
   frenchReady: boolean;
+  judgeVoices: boolean;
   overrides: { prompt: boolean; firstMessage: boolean; language: boolean; voiceId: boolean; speed: boolean };
   ok: boolean;
 };
@@ -89,6 +94,8 @@ function statusOf(agent: Agent): AgentStatus {
   const llmOk = typeof llm === "string" && llm.startsWith("claude");
   const ttsMultilingual = typeof ttsModel === "string" && !ENGLISH_ONLY_TTS.has(ttsModel);
   const frenchReady = Boolean(agent.conversation_config?.language_presets && "fr" in agent.conversation_config.language_presets);
+  const supported = agent.conversation_config?.tts?.supported_voices ?? [];
+  const judgeVoices = supported.some((v) => v.label === "judge");
   return {
     configured: true,
     name: agent.name ?? null,
@@ -97,11 +104,13 @@ function statusOf(agent: Agent): AgentStatus {
     ttsModel,
     ttsMultilingual,
     frenchReady,
+    judgeVoices,
     overrides,
     ok:
       llmOk &&
       ttsMultilingual &&
       frenchReady &&
+      judgeVoices &&
       overrides.prompt &&
       overrides.firstMessage &&
       overrides.language &&
@@ -139,11 +148,26 @@ export async function POST() {
         ? currentTts.model_id
         : MULTILINGUAL_TTS;
 
+    // Voix du juge (mode débat) : une en anglais, une en français si disponible.
+    const others = (currentTts.supported_voices ?? []).filter((v) => v.label !== "judge" && v.label !== "juge");
+    const supportedVoices: SupportedVoice[] = [
+      ...others,
+      { label: "judge", voice_id: JUDGE_VOICE_EN, description: "The neutral judge of the debate, in English. Use only for the judge's lines in debate mode." },
+    ];
+    try {
+      const { listFrenchVoices } = await import("@/lib/french-voices");
+      const fr = await listFrenchVoices(apiKey);
+      const judgeFr = process.env.ELEVENLABS_VOICE_JUDGE_FR || fr.filter((v) => v.gender === "male").at(-1)?.voiceId || fr.at(-1)?.voiceId;
+      if (judgeFr) supportedVoices.push({ label: "juge", voice_id: judgeFr, language: "fr", description: "Le juge neutre du débat, en français. Seulement pour les répliques du juge en mode débat." });
+    } catch (error) {
+      console.error("Voix du juge FR indisponible", error);
+    }
+
     // On repart de l'existant pour ne rien effacer d'autre.
     const body = {
       conversation_config: {
         agent: { prompt: { ...currentPrompt, llm: TARGET_LLM } },
-        tts: { ...currentTts, model_id: ttsModel },
+        tts: { ...currentTts, model_id: ttsModel, supported_voices: supportedVoices },
         language_presets: {
           ...currentPresets,
           fr: currentPresets.fr ?? { overrides: { agent: { language: "fr" } } },

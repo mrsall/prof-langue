@@ -29,6 +29,7 @@ export async function GET(request: Request) {
   const today = now.toISOString().slice(0, 10);
   if (!force) {
     if (!reminder.enabled) return Response.json({ sent: false, reason: "rappels désactivés" });
+    // Le cron passe à 8 h et à 18 h (heure de Dakar) : on envoie au passage qui suit l'heure choisie.
     if (dakarHour < reminder.hour) return Response.json({ sent: false, reason: `pas encore l'heure (${reminder.hour} h)` });
     if (reminder.lastSentDay === today) return Response.json({ sent: false, reason: "déjà envoyé aujourd'hui" });
   }

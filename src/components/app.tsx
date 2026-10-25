@@ -21,7 +21,7 @@ import { useProgress, useToday } from "@/lib/progress";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
 import type { ReglagesState } from "@/app/api/reglages/route";
-import type { SessionKind, ReviewWord } from "@/lib/prompt";
+import type { SessionKind, ReviewWord, Rematch } from "@/lib/prompt";
 import { levelIsStale, type LevelInfo } from "@/lib/levels";
 
 /**
@@ -45,6 +45,8 @@ type SessionParams = {
   topic: TopicChoice;
   kind: SessionKind;
   reviewWords?: ReviewWord[];
+  /** Revanche d'un débat : même motion, mêmes camps, remarques du juge à vérifier. */
+  rematch?: Rematch | null;
 };
 
 const TEST_MAX_SECONDS = 330;
@@ -376,6 +378,7 @@ function AppInner() {
             memory: history.memoryFor(p.personality.id, p.personality.modeLabel),
             kind: p.kind,
             reviewWords: p.reviewWords,
+            rematch: p.rematch ?? null,
             connectionType: type,
             context: context
               ? { resumeMessage: context.resumeMessage, transcript: transcriptRef.current.map((l) => ({ role: l.role, text: l.text })) }
@@ -661,8 +664,8 @@ function AppInner() {
         onSpeedChange={setSavedSpeed}
         talkMode={talkMode}
         onTalkModeChange={setSavedTalkMode}
-        streak={progress.streak}
-        minutesToday={progress.minutesToday}
+        streak={remote?.db && remote.streak != null ? Math.max(remote.streak, progress.streak) : progress.streak}
+        minutesToday={remote?.db ? Math.max(remote.todayMinutes, progress.minutesToday) : progress.minutesToday}
         goalMinutes={progress.goalMinutes}
         onStart={() => setPhase("topic")}
         level={currentLevel?.level ?? null}
@@ -708,6 +711,10 @@ function AppInner() {
         costFcfa={savedCost}
         onAgain={() => setPhase("topic")}
         onHome={() => setPhase("home")}
+        onRematch={(rematch) => {
+          const base = live ?? { personality, language, correction, speed, topic: { title: null, own: false }, kind: "conversation" as SessionKind };
+          begin({ ...base, kind: "conversation", rematch });
+        }}
         onTeacher={(focus) => {
           const prof = findPersonality("prof") ?? personality;
           setSavedMode(prof.id);
@@ -1331,6 +1338,7 @@ function BilanScreen({
   costFcfa,
   onAgain,
   onHome,
+  onRematch,
   onTeacher,
 }: {
   summary: { seconds: number; userTurns: number; userShare: number; streak: number; minutesToday: number; goalReached: boolean } | null;
@@ -1344,6 +1352,7 @@ function BilanScreen({
   costFcfa: number | null;
   onAgain: () => void;
   onHome: () => void;
+  onRematch: (rematch: Rematch) => void;
   onTeacher: (focus: string) => void;
 }) {
   const [showCorrected, setShowCorrected] = useState(false);
@@ -1438,6 +1447,56 @@ function BilanScreen({
         </section>
       ) : (
         <>
+          {bilan?.debate && (
+            <section className="flex flex-col gap-3 rounded-2xl border border-accent/40 bg-elevated p-4">
+              <div className="flex items-center gap-2">
+                <span className="grid h-9 w-9 place-items-center rounded-full bg-accent-soft text-accent" aria-hidden>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 3v18M5 7l7-4 7 4M3 13l2-6 2 6a2 2 0 0 1-4 0zM17 13l2-6 2 6a2 2 0 0 1-4 0zM8 21h8" />
+                  </svg>
+                </span>
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold">Verdict du juge</span>
+                  <span className="text-xs text-muted">
+                    {bilan.debate.winner === "cherif" ? "Tu as gagné ce débat." : bilan.debate.winner === "leo" ? "Leo a gagné ce débat." : "Match nul."}
+                    {bilan.debate.side ? ` Tu défendais le ${bilan.debate.side === "for" ? "pour" : "contre"}.` : ""}
+                  </span>
+                </div>
+              </div>
+              {bilan.debate.why && <p className="text-sm leading-snug">{bilan.debate.why}</p>}
+              {bilan.debate.bestArgument && (
+                <div className="rounded-xl bg-bg px-3 py-2 text-sm">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted">Ton meilleur argument</span>
+                  <p className="mt-1 leading-snug">{bilan.debate.bestArgument}</p>
+                </div>
+              )}
+              {bilan.debate.improvements.length > 0 && (
+                <ul className="flex flex-col gap-1 text-sm">
+                  {bilan.debate.improvements.map((imp) => (
+                    <li key={imp} className="flex gap-2">
+                      <span className="text-accent" aria-hidden>
+                        •
+                      </span>
+                      <span className="leading-snug">{imp}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  onRematch({
+                    side: bilan.debate?.side ?? null,
+                    notes: [...(bilan.debate?.improvements ?? []), ...bilan.errors.map((e) => `${e.wrong} → ${e.right}`)].slice(0, 6),
+                  })
+                }
+                className="h-12 rounded-xl bg-accent text-sm font-bold text-accent-contrast"
+              >
+                Refaire le débat
+              </button>
+              <span className="text-center text-xs text-muted">Même sujet, mêmes camps. Le juge vérifiera si tu as corrigé ses remarques.</span>
+            </section>
+          )}
           {bilan && bilan.upgrades.length > 0 && (
             <section className="flex flex-col gap-2 rounded-2xl border border-accent/30 bg-elevated p-4">
               <span className="text-sm font-semibold">Dire plus précisément</span>

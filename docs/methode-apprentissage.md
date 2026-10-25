@@ -23,7 +23,8 @@ Tu l'as dit toi-même : tu sais ce que tu penses, mais tu n'arrives pas à le fo
 ## Ce que ça change concrètement
 
 - Tous les personnages suivent la même méthode (répliques courtes pour eux, longues pour toi, tournures à réutiliser, étayage puis retrait de l'aide, recyclage de tes mots du carnet).
-- **Leo le débatteur** joue deux rôles : modérateur qui annonce une motion et te laisse choisir un camp, puis adversaire qui argumente vraiment à chaque tour, et enfin juge qui dit qui a gagné et pourquoi.
+- **Le débat se joue à trois.** Un juge neutre, avec sa propre voix, annonce la motion et te demande ton camp. Leo prend l'autre camp et argumente vraiment, sans jamais corriger ta langue (c'est un adversaire, pas un prof). À la fin, le juge dit honnêtement qui a gagné et pourquoi, et nomme ton meilleur argument. Le bilan liste ensuite toutes tes erreurs de langue, et le bouton « Refaire le débat » relance la même motion avec les mêmes camps : le juge vérifie alors si tu as corrigé ses remarques.
+- **Personne ne te flatte.** Les personnages n'ont pas le droit de dire « très bien » à une phrase fausse ni d'être d'accord avec toi par politesse. Emma est la plus exigeante : elle dit « non, pas comme ça », donne la bonne forme et te la fait redire. Les autres restent francs sur le fond (un ami ou un grand frère qui dit toujours oui ne sert à rien), mais gardent leur ton.
 - **Emma** structure ses séances : échauffement, deux ou trois tournures, conversation, tour de fluidité, un seul point à travailler.
 - Le niveau mesuré par le test sert à régler la difficulté « un cran au-dessus » du tien.
 - Les mots de ton carnet sont glissés naturellement dans les discussions, en plus des révisions.

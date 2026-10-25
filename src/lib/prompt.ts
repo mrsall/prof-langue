@@ -10,6 +10,8 @@ export type MemoryItem = { date: string; mode: string; topic: string };
 export type TranscriptLine = { role: "user" | "agent"; text: string };
 export type SessionKind = "conversation" | "test" | "revision";
 export type ReviewWord = { word: string; translation: string };
+export type PastError = { wrong: string; right: string };
+export type Rematch = { side: "for" | "against" | null; notes: string[] };
 
 const COMMON_RULES: Record<Language, string> = {
   en: `
@@ -23,7 +25,7 @@ Your job is to make him SPEAK a lot, at a level just above his own, with ready-m
 5. Scaffold, then fade. If he is stuck, offer a sentence starter or two possible answers to choose from; as he improves, offer less and wait longer.
 6. Recycle. Reuse words and phrases he used earlier in the session, and the words from his notebook listed below if any, so he hears them again in context.
 7. French is a bridge, not a crutch: if he asks "comment on dit..." or slips a French word in, give the English chunk, have him repeat it once, continue in English.
-8. Never say "mistake" or "error". Never comment on his accent. Never mock, never discourage. Praise precisely (name what he did well), not generically.
+8. Be honest. Never say "good", "great" or "well done" about a sentence that was wrong or weak: that is a lie and it stops him from improving. Praise only what is genuinely good, and say exactly why. Disagree when you disagree: you have your own opinions, do not echo his. Never comment on his accent, never mock, never humiliate; honesty and respect go together.
 9. When he asks you to repeat, say your last sentence again, slower and simpler.
 10. Be a real person: feelings, opinions, small believable stories. You only receive text, so never judge pronunciation.
 11. Stay on the chosen topic, but follow him if he wants to change.
@@ -43,7 +45,7 @@ Ton travail : le faire PARLER longtemps, avec un français un cran au-dessus du 
 4. Tours de fluidité. Quand il a raconté quelque chose, demande-lui de le redire plus court et plus vite, en deux phrases, avec les tournures données. Une ou deux fois par séance, pas plus.
 5. Étaye, puis retire l'aide. S'il bloque, propose un début de phrase ou deux réponses au choix ; quand il progresse, aide moins et attends plus.
 6. Recycle. Réutilise les mots qu'il a employés plus tôt et ceux de son carnet listés plus bas, pour qu'il les réentende en contexte.
-7. Ne dis jamais « erreur » ni « faute ». Jamais de remarque sur son accent. Jamais moqueur, jamais décourageant. Félicite avec précision (nomme ce qu'il a bien fait).
+7. Sois honnête. Ne dis jamais « c'est bien », « très bien » ou « bravo » après une phrase fausse ou faible : c'est un mensonge et ça l'empêche de progresser. Félicite seulement ce qui est vraiment bon, en disant exactement pourquoi. Contredis-le quand tu n'es pas d'accord : tu as tes propres avis, ne répète pas les siens. Jamais de remarque sur son accent, jamais moqueur, jamais humiliant ; honnêteté et respect vont ensemble.
 8. S'il demande de répéter, redis ta dernière phrase, plus lentement et plus simplement.
 9. Sois une vraie personne : émotions, avis, petites histoires crédibles. Tu ne reçois que du texte : ne juge jamais sa prononciation.
 10. Reste sur le sujet choisi, mais suis-le s'il veut changer.
@@ -89,8 +91,12 @@ export function buildPrompt(options: {
   reviewWords?: ReviewWord[];
   /** Mots du carnet à réutiliser naturellement pendant la discussion. */
   recycleWords?: ReviewWord[];
+  /** Erreurs des séances précédentes (pour Emma et le juge). */
+  pastErrors?: PastError[];
+  /** Débat rejoué : même motion, mêmes camps, points à vérifier. */
+  rematch?: Rematch | null;
 }) {
-  const { personality, language, correction, topic, ownTopic, memory, context, kind = "conversation", levelText, reviewWords, recycleWords } = options;
+  const { personality, language, correction, topic, ownTopic, memory, context, kind = "conversation", levelText, reviewWords, recycleWords, pastErrors, rematch } = options;
   const parts: string[] = [];
 
   parts.push(personality.character[language]);
@@ -118,6 +124,25 @@ export function buildPrompt(options: {
 
   if (["ami", "grand-frere", "debatteur"].includes(personality.id)) {
     parts.push(REFER_TO_TEACHER[language]);
+  }
+
+  if (pastErrors && pastErrors.length > 0 && (personality.id === "prof" || personality.id === "debatteur")) {
+    const list = pastErrors.map((e) => `"${e.wrong}" → "${e.right}"`).join("; ");
+    parts.push(
+      language === "en"
+        ? `Points he got wrong in previous sessions: ${list}. ${personality.id === "prof" ? "Create natural occasions to check them, and if he gets one wrong again, correct it firmly." : "The judge should mention in the verdict whether these came back."}`
+        : `Points qu'il a ratés lors des séances précédentes : ${list}. ${personality.id === "prof" ? "Crée des occasions naturelles de les vérifier, et s'il se trompe encore, corrige fermement." : "Le juge dira dans le verdict si ces erreurs sont revenues."}`,
+    );
+  }
+
+  if (rematch && personality.id === "debatteur") {
+    const side = rematch.side === "for" ? (language === "en" ? "FOR" : "POUR") : rematch.side === "against" ? (language === "en" ? "AGAINST" : "CONTRE") : null;
+    const notes = rematch.notes.map((n) => `- ${n}`).join("\n");
+    parts.push(
+      language === "en"
+        ? `REMATCH. This is the same debate again, same motion${side ? `, Cherif argues ${side} and Leo the opposite` : ""}. The judge does not ask him to choose a side again: he reminds the motion and the sides in one sentence and says this is the rematch. Last time the judge asked Cherif to improve these points:\n${notes}\nIn the final verdict, the judge must say, point by point, whether Cherif fixed each one this time, honestly.`
+        : `REVANCHE. C'est le même débat, même motion${side ? `, Cherif défend ${side} et Leo l'inverse` : ""}. Le juge ne lui redemande pas de choisir un camp : il rappelle la motion et les camps en une phrase et annonce la revanche. La dernière fois, le juge avait demandé à Cherif d'améliorer ces points :\n${notes}\nDans le verdict final, le juge doit dire, point par point et honnêtement, si Cherif a corrigé chacun d'eux cette fois.`,
+    );
   }
 
   if (ownTopic) {

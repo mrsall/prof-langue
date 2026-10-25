@@ -16,6 +16,13 @@ Tout ce qui existait en V2 (six personnages, anglais et français, sujets, corre
 
 Les personnages se souviennent des sujets de vos dernières séances. Les notes de prononciation arrivent en V4.
 
+Depuis l'audit du 25 octobre :
+
+- **Personne ne te flatte.** Emma dit « non, pas comme ça » et te fait redire la bonne forme. Les autres restent francs : ils ne félicitent jamais une phrase fausse et peuvent ne pas être d'accord avec toi.
+- **Débat à trois** : un juge (voix différente) donne le sujet et te demande ton camp, Leo prend l'autre camp et ne corrige jamais ta langue, puis le juge dit qui a gagné et pourquoi. Le bilan montre le verdict, ton meilleur argument, toutes tes erreurs, et un bouton **« Refaire le débat »** : même sujet, mêmes camps, le juge vérifie si tu as corrigé ses remarques.
+- **Mémoire des erreurs** : Emma et le juge connaissent tes erreurs des dernières séances et vérifient qu'elles ne reviennent pas.
+- **Rappels** : le serveur passe à 8 h et à 18 h (heure de Dakar) ; choisis l'une des deux dans Réglages.
+
 ## Mise en route (à faire une seule fois)
 
 ### 1. L'agent ElevenLabs
