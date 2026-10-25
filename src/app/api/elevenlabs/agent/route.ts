@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 /**
  * Réglage automatique de l'agent ElevenLabs, pour éviter les clics dans le
  * dashboard : autorise les overrides dont l'app a besoin (consignes, première
@@ -108,6 +109,7 @@ function statusOf(agent: Agent): AgentStatus {
 }
 
 export async function GET() {
+  await connection();
   const { apiKey, agentId } = env();
   if (!apiKey) return missing("ELEVENLABS_API_KEY");
   if (!agentId) return missing("ELEVENLABS_AGENT_ID");

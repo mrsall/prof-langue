@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { ensureFrenchVoices, listFrenchVoices } from "@/lib/french-voices";
 
 /**
@@ -25,6 +26,7 @@ function statusOf(voices: FrenchVoicesStatus["voices"], added?: string[]): Frenc
 }
 
 export async function GET() {
+  await connection();
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) return missing("ELEVENLABS_API_KEY");
   try {

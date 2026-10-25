@@ -2,7 +2,9 @@ import { findVoice } from "@/config/voices";
 import { findPersonality, isLanguage, pickFirstMessage, type Language } from "@/config/personalities";
 import { isSpeedKey, speedValue } from "@/config/speeds";
 import { isCorrectionLevel } from "@/config/correction";
-import { buildPrompt, type MemoryItem, type TranscriptLine } from "@/lib/prompt";
+import { buildPrompt, type MemoryItem, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
+import { getLevel, LEVEL_DESCRIPTIONS } from "@/lib/settings";
+import { dbAvailable } from "@/lib/db";
 import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
 import { PERSONALITIES } from "@/config/personalities";
 
@@ -26,6 +28,8 @@ type Body = {
   topic?: string | null;
   ownTopic?: boolean;
   memory?: MemoryItem[];
+  kind?: SessionKind;
+  reviewWords?: ReviewWord[];
   /** Reprise d'une discussion en cours (changement de réglage, coupure). */
   context?: { transcript?: TranscriptLine[]; resumeMessage?: string };
 };
@@ -134,6 +138,25 @@ export async function POST(request: Request) {
           .slice(0, 5)
       : [];
     const context = body.context;
+    const kind: SessionKind = body.kind === "test" || body.kind === "revision" ? body.kind : "conversation";
+    const reviewWords = Array.isArray(body.reviewWords)
+      ? body.reviewWords.filter((w) => w && typeof w.word === "string").slice(0, 12).map((w) => ({ word: w.word, translation: String(w.translation ?? "") }))
+      : [];
+    let levelText: string | undefined;
+    if (dbAvailable()) {
+      try {
+        const info = await getLevel(language);
+        if (info) {
+          const desc = LEVEL_DESCRIPTIONS[info.level]?.[language];
+          levelText =
+            language === "en"
+              ? `His current English level is ${info.level} (${desc ?? ""}). Adapt your vocabulary and speed to that level and raise it slowly.`
+              : `Son niveau actuel en français parlé est ${info.level} (${desc ?? ""}). Adapte ton vocabulaire à ce niveau et élève-le progressivement.`;
+        }
+      } catch (error) {
+        console.error("Niveau indisponible", error);
+      }
+    }
     const prompt = buildPrompt({
       personality,
       language,
@@ -142,10 +165,27 @@ export async function POST(request: Request) {
       ownTopic,
       memory,
       context: context?.transcript,
+      kind,
+      levelText,
+      reviewWords,
     });
+    const testOpeners: Record<Language, string> = {
+      en: "Hi Cherif! Let's have a quick five-minute chat so I can see where you are. No pressure at all. First: can you tell me your name and where you live?",
+      fr: "Bonjour Cherif ! On va discuter cinq petites minutes pour que je voie où tu en es. Aucune pression. D'abord : tu peux te présenter et me dire où tu habites ?",
+    };
+    const revisionOpeners: Record<Language, string> = {
+      en: "Hi Cherif! Quick vocabulary review, a few words from your last sessions. Ready? Here's the first one.",
+      fr: "Salut Cherif ! Petite révision de vocabulaire, quelques mots de tes dernières séances. Prêt ? Voici le premier.",
+    };
     const firstMessage =
       context?.resumeMessage?.trim() ||
-      (ownTopic ? personality.ownTopicMessages[language] : pickFirstMessage(personality, language, topic ?? ""));
+      (kind === "test"
+        ? testOpeners[language]
+        : kind === "revision"
+          ? revisionOpeners[language]
+          : ownTopic
+            ? personality.ownTopicMessages[language]
+            : pickFirstMessage(personality, language, topic ?? ""));
     overrides.agent = { prompt: { prompt }, firstMessage };
     if (language !== "en") overrides.agent.language = language;
   }

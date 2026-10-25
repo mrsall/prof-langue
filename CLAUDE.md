@@ -134,16 +134,19 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
 
 - ~~Voix retenue (choix en V0).~~ Réglé : **George** (britannique, homme, `JBFqnCBsobJjWmhhKeHm`).
 - ~~Prénoms et caractère détaillé de chaque personnalité.~~ Proposés en V2 : Max (ami), Ibrahim (grand frère), Leo (débatteur), Emma (prof), Thomas (collègue), rôle de situation. À confirmer par Cherif.
-- Plafond de dépense quotidien.
-- Heure du rappel quotidien.
+- ~~Plafond de dépense quotidien.~~ Réglable dans l'app (défaut 30 min/jour, 60 FCFA/min).
+- ~~Heure du rappel quotidien.~~ Réglable dans l'app (défaut 18 h ; le cron Vercel tourne à 18 h UTC, à décaler dans `vercel.json` si Cherif choisit plus tard).
 
 ## État du projet
 
 - **V0 validée (24 oct. 2026)** : voix George, délai sous 2 s, interruption OK. Page conservée sur `/test-voix`.
 - **V1 validée (25 oct. 2026)** : mode ami avec Max, mains libres par défaut (appui pour parler en option), Répète, vitesse, bilan simple, page `/reglages` qui configure l'agent ElevenLabs par l'API.
-- **V2 construite, en attente de validation par Cherif.**
-  - Six personnalités dans `src/config/personalities.ts` (caractère et consignes EN/FR, avatar, voix, correction par défaut). Règles communes, niveaux de correction et souvenirs assemblés dans `src/lib/prompt.ts`.
-  - `src/components/app.tsx` : accueil (langue, mode, micro, vitesse) → sujet (`/api/sujets` via Claude, secours dans `src/config/topics.ts`, mon propre sujet, surprends-moi) → conversation (Répète, Vitesse, Correction, Texte, mains libres ou appui) → bilan (`/api/bilan` : points à retenir, mots du jour, encouragement, proposition de séance prof).
-  - Français : override de langue + préréglage `fr` + voix multilingue, appliqués par `/api/elevenlabs/agent` (page Réglages ou automatiquement au lancement).
-  - Historique des séances et progression en localStorage jusqu'à la V3.
-- Prochaine étape : Cherif fait une séance complète dans chaque mode (EN puis FR). Ensuite V3.
+- **V2 validée (25 oct. 2026)** : six personnalités (`src/config/personalities.ts`), anglais et français, sujets (`/api/sujets`), correction réglable, souvenirs, bilan enrichi. Voix françaises de la bibliothèque ElevenLabs ajoutées automatiquement (`src/lib/french-voices.ts`) après le retour « accent québécois ».
+- **V3 construite, en attente de validation par Cherif (une semaine d'usage quotidien).**
+  - Base Postgres (`DATABASE_URL`, ex. Supabase) avec schéma auto (`src/lib/db.ts`) ; sans elle, l'app fonctionne en mode téléphone seul.
+  - Test de niveau (`kind: "test"`, 5 min avec Emma, `/api/niveau`), niveau injecté dans les consignes, réévaluation après 30 jours.
+  - Bilan complet avec corrections par ligne (`/api/bilan`), texte de la séance corrigé, séances enregistrées (`/api/sessions`), carnet alimenté.
+  - Carnet `/carnet` (révision espacée J+1/3/7/21 puis 60, `/api/mots`), révision à la voix (`kind: "revision"`).
+  - Suivi `/suivi`, réglages V3 (coût/minute, plafond, rappel), rappels push (`public/sw.js`, clés VAPID en base, cron `vercel.json` à 18 h UTC), code d'accès `APP_PIN` via `src/proxy.ts`.
+  - Cherif doit créer la base Supabase et renseigner `DATABASE_URL` (et `APP_PIN` conseillé) dans Vercel.
+- Prochaine étape : V4 (prononciation, shadowing, suivi des sons) après validation.

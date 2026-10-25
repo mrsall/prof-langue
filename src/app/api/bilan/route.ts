@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 
@@ -20,6 +21,8 @@ export type BilanResult = {
   available: boolean;
   words: { en: string; fr: string }[];
   errors: { wrong: string; right: string; tip: string }[];
+  /** Lignes de Cherif à corriger : index dans le texte envoyé, version corrigée. */
+  corrections: { index: number; corrected: string }[];
   encouragement: string | null;
   suggestTeacher: boolean;
   teacherFocus: string | null;
@@ -28,7 +31,7 @@ export type BilanResult = {
 const DEFAULT_MODEL = "claude-haiku-5-5";
 
 function emptyBilan(available: boolean): BilanResult {
-  return { available, words: [], errors: [], encouragement: null, suggestTeacher: false, teacherFocus: null };
+  return { available, words: [], errors: [], corrections: [], encouragement: null, suggestTeacher: false, teacherFocus: null };
 }
 
 function systemPrompt(language: Language, name: string, recapHint: string | undefined) {
@@ -36,10 +39,11 @@ function systemPrompt(language: Language, name: string, recapHint: string | unde
   return `You help Cherif, a French speaker from Senegal, improve his spoken ${target}. You receive the transcript of a spoken conversation between Cherif and ${name}.
 
 Return ONLY a JSON object, no prose, no code fences, with this exact shape:
-{"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"encouragement":"...","suggestTeacher":false,"teacherFocus":"..."}
+{"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"encouragement":"...","suggestTeacher":false,"teacherFocus":"..."}
 
 - "words": 3 to 5 useful ${target} words or short expressions from the conversation (ones ${name} introduced, ones Cherif asked for, or correct forms he can reuse). The key "en" holds the ${target} form, "fr" a short French translation or explanation. Beginner-friendly. No duplicates.
 - "errors": up to 3 of Cherif's most useful mistakes to fix (grammar, vocabulary, word order), each with "wrong" (what he said), "right" (the correct form) and "tip" (one short sentence in French explaining the rule). Empty array if none. Never about accent or pronunciation (you only see text).
+- "corrections": for each of Cherif's lines that contains a real mistake, its number (the [N] shown in the transcript) and the whole line rewritten correctly in natural ${target}, keeping his meaning and words as much as possible. Skip lines that are fine. At most 12 items. Speech-to-text glitches (missing punctuation, a misheard word that is obviously the transcriber's fault) are not mistakes.
 - "encouragement": one or two sentences in ${target}, in ${name}'s own voice and tone, pointing to one precise thing Cherif did well. Never mention mistakes, errors or accent.
 - "suggestTeacher": true only if there were many mistakes (roughly 4 or more clear recurring ones) and a lesson with a teacher would help.
 - "teacherFocus": if suggestTeacher is true, a short French phrase naming the 1 or 2 points to work on (e.g. "le passé et les questions"), else null.
@@ -59,6 +63,11 @@ function parseResult(text: string): BilanResult {
           .filter((w): w is { en: string; fr: string } => typeof w === "object" && w !== null && isStr((w as { en?: unknown }).en) && isStr((w as { fr?: unknown }).fr))
           .slice(0, 5)
       : [];
+    const corrections = Array.isArray(parsed.corrections)
+      ? parsed.corrections
+          .filter((c): c is { index: number; corrected: string } => typeof c === "object" && c !== null && typeof (c as { index?: unknown }).index === "number" && isStr((c as { corrected?: unknown }).corrected))
+          .slice(0, 12)
+      : [];
     const errors = Array.isArray(parsed.errors)
       ? parsed.errors
           .filter(
@@ -72,6 +81,7 @@ function parseResult(text: string): BilanResult {
       available: true,
       words,
       errors,
+      corrections,
       encouragement: isStr(parsed.encouragement) ? parsed.encouragement : null,
       suggestTeacher: parsed.suggestTeacher === true,
       teacherFocus: isStr(parsed.teacherFocus) ? parsed.teacherFocus : null,
@@ -83,6 +93,7 @@ function parseResult(text: string): BilanResult {
 
 /** Dit seulement si la clé Anthropic est en place (page Réglages). */
 export async function GET() {
+  await connection();
   return Response.json({ available: Boolean(process.env.ANTHROPIC_API_KEY) });
 }
 
@@ -109,9 +120,10 @@ export async function POST(request: Request) {
   const language: Language = isLanguage(body.language) ? body.language : "en";
   const name = personality.id === "situation" ? "the role-play partner" : personality.name;
 
+  const offset = Math.max(0, transcript.length - 80);
   const lines = transcript
     .slice(-80)
-    .map((l) => `${l.role === "user" ? "Cherif" : name}: ${l.text.trim().slice(0, 400)}`)
+    .map((l, i) => `[${offset + i}] ${l.role === "user" ? "Cherif" : name}: ${l.text.trim().slice(0, 400)}`)
     .join("\n");
 
   const client = new Anthropic();
