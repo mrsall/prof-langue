@@ -535,8 +535,14 @@ function AppInner() {
 
     const p = liveRef.current;
     const seconds = connectAt.current != null ? Math.round((performance.now() - connectAt.current) / 1000) : 0;
-    const total = userTalkMs.current + agentTalkMs.current;
-    const userShare = total > 0 ? Math.round((userTalkMs.current / total) * 100) : 0;
+    // Si la détection de voix n'a rien remonté (cas WebRTC), on estime le
+    // temps de parole à partir du nombre de mots prononcés.
+    const wordsOf = (role: "user" | "agent") =>
+      transcriptRef.current.filter((l) => l.role === role).reduce((n, l) => n + l.text.split(/\s+/).filter(Boolean).length, 0);
+    const userMs = userTalkMs.current > 0 ? userTalkMs.current : wordsOf("user") * 450;
+    const agentMs = agentTalkMs.current > 0 ? agentTalkMs.current : wordsOf("agent") * 380;
+    const total = userMs + agentMs;
+    const userShare = total > 0 ? Math.round((userMs / total) * 100) : 0;
     const recorded = seconds >= 30 ? progress.recordSession(seconds) : { streak: progress.streak, minutesToday: progress.minutesToday };
     if (p && seconds >= 30) {
       history.add({
@@ -1443,6 +1449,7 @@ function BilanScreen({
               ))}
             </section>
           )}
+          {kind !== "test" && (
           <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold">Mots du jour</span>
@@ -1466,6 +1473,7 @@ function BilanScreen({
               </p>
             )}
           </section>
+          )}
 
           {transcript.length > 0 && kind !== "test" && (
             <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
