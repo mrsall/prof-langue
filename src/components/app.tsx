@@ -279,6 +279,24 @@ function AppInner() {
     }
   }, []);
 
+  const frenchVoicesReady = useRef(false);
+  const ensureFrenchVoices = useCallback(async () => {
+    if (frenchVoicesReady.current) return;
+    try {
+      const res = await fetch("/api/elevenlabs/voices-fr");
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean };
+      if (res.ok && data.ok) {
+        frenchVoicesReady.current = true;
+        return;
+      }
+      const fix = await fetch("/api/elevenlabs/voices-fr", { method: "POST" });
+      const fixed = (await fix.json().catch(() => ({}))) as { ok?: boolean };
+      if (fix.ok && fixed.ok) frenchVoicesReady.current = true;
+    } catch {
+      // sans voix française, la séance se fait avec la voix habituelle
+    }
+  }, []);
+
   const start = useCallback(
     async ({ params, context, force }: StartOptions) => {
       const base: SessionParams = liveRef.current ?? { personality, language, correction, speed, topic: { title: null, own: true } };
@@ -300,6 +318,7 @@ function AppInner() {
           return false;
         }
         if (!(await ensureAgentConfigured())) return false;
+        if (p.language === "fr") await ensureFrenchVoices();
         const type = force ?? connectionType;
         attemptType.current = type;
         everConnected.current = false;
@@ -350,7 +369,7 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, history],
+    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history],
   );
 
   useEffect(() => {

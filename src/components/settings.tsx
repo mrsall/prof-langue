@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { AgentStatus } from "@/app/api/elevenlabs/agent/route";
+import type { FrenchVoicesStatus } from "@/app/api/elevenlabs/voices-fr/route";
 
 /**
  * Page Réglages (V1) : configure l'agent ElevenLabs en un bouton et montre
@@ -16,16 +17,22 @@ export function Settings() {
   const [applying, setApplying] = useState(false);
   const [done, setDone] = useState(false);
   const [bilanAvailable, setBilanAvailable] = useState<boolean | null>(null);
+  const [frVoices, setFrVoices] = useState<FrenchVoicesStatus | null>(null);
+  const [frError, setFrError] = useState<string | null>(null);
+  const [frApplying, setFrApplying] = useState(false);
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetch("/api/elevenlabs/agent"), fetch("/api/bilan")])
-      .then(async ([agentRes, bilanRes]) => {
+    Promise.all([fetch("/api/elevenlabs/agent"), fetch("/api/bilan"), fetch("/api/elevenlabs/voices-fr")])
+      .then(async ([agentRes, bilanRes, frRes]) => {
         const agentData = (await agentRes.json().catch(() => ({}))) as AgentStatus & { error?: string };
         const bilanData = (await bilanRes.json().catch(() => ({}))) as { available?: boolean };
+        const frData = (await frRes.json().catch(() => ({}))) as FrenchVoicesStatus & { error?: string };
         if (!active) return;
         setAgent(agentRes.ok ? { status: agentData, error: null } : { status: null, error: agentData.error ?? "Erreur." });
         setBilanAvailable(Boolean(bilanData.available));
+        if (frRes.ok) setFrVoices(frData);
+        else setFrError(frData.error ?? "Erreur.");
       })
       .catch(() => {
         if (active) setAgent({ status: null, error: "Pas de connexion. Vérifie ton réseau puis réessaie." });
@@ -111,6 +118,55 @@ export function Settings() {
         {done && s?.ok && <p className="text-sm text-speaking">C&apos;est réglé. Tu peux lancer une séance avec Max.</p>}
         <p className="text-xs text-muted">
           Ce bouton autorise l&apos;agent à recevoir les consignes, la première phrase, la langue, la voix et la vitesse depuis l&apos;app, ajoute le français, passe sur une voix multilingue et choisit Claude Haiku comme cerveau. Il ne touche à rien d&apos;autre.
+        </p>
+      </section>
+
+      <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Voix françaises</h2>
+          {frVoices && (
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${frVoices.ok ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>
+              {frVoices.ok ? "Prêt" : "À ajouter"}
+            </span>
+          )}
+        </div>
+        {frError && <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{frError}</p>}
+        {frVoices && frVoices.voices.length > 0 ? (
+          <ul className="flex flex-wrap gap-1.5 text-xs">
+            {frVoices.voices.map((v) => (
+              <li key={v.voiceId} className="rounded-full bg-accent-soft px-2.5 py-1">
+                {v.name} · {v.gender === "female" ? "femme" : "homme"}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          frVoices && <p className="text-sm text-muted">Aucune voix française dans ton compte pour l&apos;instant.</p>
+        )}
+        {frVoices && !frVoices.ok && (
+          <button
+            type="button"
+            disabled={frApplying}
+            onClick={async () => {
+              setFrApplying(true);
+              setFrError(null);
+              try {
+                const res = await fetch("/api/elevenlabs/voices-fr", { method: "POST" });
+                const data = (await res.json().catch(() => ({}))) as FrenchVoicesStatus & { error?: string };
+                if (res.ok) setFrVoices(data);
+                else setFrError(data.error ?? "Erreur.");
+              } catch {
+                setFrError("Pas de connexion. Réessaie.");
+              } finally {
+                setFrApplying(false);
+              }
+            }}
+            className="h-12 rounded-2xl bg-accent text-sm font-bold text-accent-contrast disabled:opacity-60"
+          >
+            {frApplying ? "Recherche en cours…" : "Ajouter des voix françaises (accent de France)"}
+          </button>
+        )}
+        <p className="text-xs text-muted">
+          En français, les personnages utilisent de vraies voix françaises de la bibliothèque ElevenLabs (accent de France, pas québécois). L&apos;app les ajoute à ton compte toute seule. Pour en imposer une : variable <code>ELEVENLABS_VOICE_FR_&lt;MODE&gt;</code>.
         </p>
       </section>
 
