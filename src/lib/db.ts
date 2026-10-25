@@ -13,9 +13,30 @@ export function dbAvailable() {
   return Boolean(process.env.DATABASE_URL);
 }
 
+/**
+ * Nettoie la chaîne de connexion collée depuis Supabase : espaces, mot de passe
+ * avec caractères spéciaux non encodés (#, @, %, /…), crochets oubliés.
+ */
+export function normalizeDatabaseUrl(raw: string) {
+  let url = raw.trim().replace(/^["']|["']$/g, "");
+  const m = url.match(/^(postgres(?:ql)?:\/\/)([^:\/@]+):(.*)@([^@]+)$/);
+  if (m) {
+    const [, scheme, user, password, rest] = m;
+    let decoded = password;
+    try {
+      decoded = decodeURIComponent(password);
+    } catch {
+      decoded = password;
+    }
+    url = `${scheme}${user}:${encodeURIComponent(decoded)}@${rest}`;
+  }
+  return url;
+}
+
 export async function db(): Promise<Sql | null> {
-  const url = process.env.DATABASE_URL;
-  if (!url) return null;
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) return null;
+  const url = normalizeDatabaseUrl(rawUrl);
   if (!globalForDb.__profLangueSql) {
     globalForDb.__profLangueSql = postgres(url, {
       ssl: url.includes("localhost") ? undefined : "require",
@@ -99,8 +120,36 @@ export async function setSetting(key: string, value: unknown) {
   return true;
 }
 
-/** Erreur lisible pour Cherif quand la base ne répond pas. */
+/** Erreur lisible pour Cherif quand la base ne répond pas, avec la cause probable. */
 export function dbErrorMessage(error: unknown) {
   console.error("Base de données", error);
-  return "La base de données ne répond pas. Vérifie DATABASE_URL dans Vercel (voir Réglages).";
+  const e = error as { code?: string; message?: string; errno?: string } | undefined;
+  const code = String(e?.code ?? e?.errno ?? "");
+  const msg = String(e?.message ?? "").toLowerCase();
+  const url = process.env.DATABASE_URL ?? "";
+  const hint = (() => {
+    if (url.includes("[YOUR-PASSWORD]") || url.includes("YOUR-PASSWORD")) {
+      return "La chaîne contient encore [YOUR-PASSWORD] : remplace-le par le mot de passe de la base (sans les crochets).";
+    }
+    if (code === "28P01" || msg.includes("password authentication failed")) {
+      return "Mot de passe refusé. Dans Supabase → Project Settings → Database → Reset database password, génère un nouveau mot de passe, puis mets à jour DATABASE_URL dans Vercel.";
+    }
+    if (msg.includes("tenant or user not found")) {
+      return "Nom d'utilisateur incomplet pour le pooler : il doit ressembler à postgres.xxxxxxxx (copie la chaîne de l'onglet Transaction pooler sans la modifier).";
+    }
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+      return "Adresse du serveur introuvable : la chaîne est sans doute incomplète ou mal copiée.";
+    }
+    if (code === "ENETUNREACH" || code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "CONNECT_TIMEOUT" || msg.includes("timeout")) {
+      return "Serveur injoignable. Utilise la chaîne de l'onglet Transaction pooler (port 6543), pas la connexion directe (port 5432), qui n'est pas accessible depuis Vercel.";
+    }
+    if (msg.includes("ssl") || msg.includes("certificate")) {
+      return "Problème de connexion sécurisée (SSL). Réessaie dans un instant ; si ça continue, envoie-moi une capture.";
+    }
+    if (msg.includes("too many") || msg.includes("max client")) {
+      return "Trop de connexions ouvertes. Utilise l'onglet Transaction pooler (port 6543).";
+    }
+    return `Détail technique : ${code || msg.slice(0, 80) || "inconnu"}.`;
+  })();
+  return `La base de données ne répond pas. ${hint}`;
 }
