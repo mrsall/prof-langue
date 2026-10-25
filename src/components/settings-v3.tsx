@@ -221,11 +221,8 @@ export function SettingsV3() {
             <label className="flex items-center justify-between gap-3 text-sm">
               <span>Heure du rappel</span>
               <select value={hour} onChange={(e) => setHour(e.target.value)} className="h-11 rounded-xl border border-line bg-bg px-3 text-base text-fg">
-                {Array.from({ length: 24 }, (_, h) => (
-                  <option key={h} value={h}>
-                    {h} h
-                  </option>
-                ))}
+                <option value="8">Le matin (vers 8 h)</option>
+                <option value="18">Le soir (vers 18 h)</option>
               </select>
             </label>
             {pushSupported === false && <p className="text-xs text-muted">Ce navigateur ne gère pas les notifications. Sur iPhone, installe l&apos;app sur l&apos;écran d&apos;accueil puis reviens ici.</p>}
@@ -251,7 +248,7 @@ export function SettingsV3() {
               </button>
             )}
             {pushMessage && <p className="text-xs text-muted">{pushMessage}</p>}
-            <p className="text-xs text-muted">Une notification par jour avec un sujet. Le serveur vérifie une fois par jour vers 18 h (heure de Dakar) : si tu choisis une heure plus tard, dis-le-moi pour que je décale la vérification.</p>
+            <p className="text-xs text-muted">Une notification par jour avec un sujet, le matin vers 8 h ou le soir vers 18 h (heure de Dakar).</p>
           </section>
         </>
       )}

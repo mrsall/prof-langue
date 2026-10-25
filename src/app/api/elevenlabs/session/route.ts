@@ -2,7 +2,7 @@ import { findVoice } from "@/config/voices";
 import { findPersonality, isLanguage, pickFirstMessage, type Language } from "@/config/personalities";
 import { isSpeedKey, speedValue } from "@/config/speeds";
 import { isCorrectionLevel } from "@/config/correction";
-import { buildPrompt, type MemoryItem, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
+import { buildPrompt, type MemoryItem, type PastError, type Rematch, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
 import { getLevel, LEVEL_DESCRIPTIONS } from "@/lib/settings";
 import { db, dbAvailable, withTimeout } from "@/lib/db";
 import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
@@ -32,6 +32,7 @@ type Body = {
   memory?: MemoryItem[];
   kind?: SessionKind;
   reviewWords?: ReviewWord[];
+  rematch?: Rematch | null;
   /** Reprise d'une discussion en cours (changement de réglage, coupure). */
   context?: { transcript?: TranscriptLine[]; resumeMessage?: string };
 };
@@ -146,10 +147,11 @@ export async function POST(request: Request) {
       : [];
     let levelText: string | undefined;
     let recycleWords: ReviewWord[] = [];
+    let pastErrors: PastError[] = [];
     if (dbAvailable()) {
       try {
         // La séance ne doit jamais attendre la base : 1,5 s maximum, sinon on fait sans.
-        const [rows, info] = await withTimeout(
+        const [rows, info, errs] = await withTimeout(
           (async () => {
             const sql = await db();
             const words =
@@ -157,11 +159,17 @@ export async function POST(request: Request) {
                 ? await sql<{ word: string; translation: string | null }[]>`select word, translation from words
                     where language = ${language} order by due_at asc limit 6`
                 : [];
-            return [words, await getLevel(language)] as const;
+            const recent =
+              sql && kind === "conversation" && (personality.id === "prof" || personality.id === "debatteur")
+                ? await sql<{ wrong: string; right: string }[]>`select wrong, "right" from errors
+                    where language = ${language} order by created_at desc limit 6`
+                : [];
+            return [words, await getLevel(language), recent] as const;
           })(),
           1500,
         );
         recycleWords = rows.map((r) => ({ word: r.word, translation: r.translation ?? "" }));
+        pastErrors = errs.map((e) => ({ wrong: e.wrong, right: e.right }));
         if (info) {
           const desc = LEVEL_DESCRIPTIONS[info.level]?.[language];
           levelText =
@@ -185,6 +193,8 @@ export async function POST(request: Request) {
       levelText,
       reviewWords,
       recycleWords,
+      pastErrors,
+      rematch: body.rematch && Array.isArray(body.rematch.notes) ? { side: body.rematch.side ?? null, notes: body.rematch.notes.filter((n) => typeof n === "string").slice(0, 6) } : null,
     });
     const testOpeners: Record<Language, string> = {
       en: "Hi Cherif! Let's have a quick five-minute chat so I can see where you are. No pressure at all. First: can you tell me your name and where you live?",

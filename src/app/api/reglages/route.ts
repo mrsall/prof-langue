@@ -19,6 +19,8 @@ export type ReglagesState = {
   reminder: { enabled: boolean; hour: number; subscribed: boolean };
   dueWords: number;
   pinEnabled: boolean;
+  /** Série de jours calculée sur la base (null sans base). */
+  streak: number | null;
 };
 
 export async function GET() {
@@ -34,11 +36,12 @@ export async function GET() {
     reminder: { enabled: false, hour: 18, subscribed: false },
     dueWords: 0,
     pinEnabled: Boolean(process.env.APP_PIN),
+    streak: null,
   };
   if (!state.db) return Response.json(state);
   try {
     const sql = (await withTimeout(db(), 16000))!;
-    const [en, fr, cost, reminder, push, today, month, due] = await withTimeout(Promise.all([
+    const [en, fr, cost, reminder, push, today, month, due, days] = await withTimeout(Promise.all([
       getLevel("en"),
       getLevel("fr"),
       getCostSettings(),
@@ -49,6 +52,8 @@ export async function GET() {
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
       sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
+      sql<{ day: string }[]>`select distinct to_char((started_at at time zone 'Africa/Dakar')::date, 'YYYY-MM-DD') as day
+        from sessions where seconds >= 30 order by 1 desc limit 400`,
     ]), 8000);
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
@@ -59,6 +64,7 @@ export async function GET() {
     state.monthFcfa = Math.round(month[0]?.fcfa ?? 0);
     state.reminder = { enabled: reminder.enabled, hour: reminder.hour, subscribed: push.length > 0 };
     state.dueWords = due[0]?.n ?? 0;
+    state.streak = streakFromDays(days.map((d) => d.day));
   } catch (error) {
     state.dbError = dbErrorMessage(error);
   }
@@ -96,6 +102,22 @@ export async function POST(request: Request) {
   } catch (error) {
     return Response.json({ error: dbErrorMessage(error) }, { status: 502 });
   }
+}
+
+/** Jours consécutifs avec une séance, aujourd'hui ou hier comme point de départ. */
+export function streakFromDays(days: string[]) {
+  if (days.length === 0) return 0;
+  const set = new Set(days);
+  const today = new Date();
+  const key = (d: Date) => d.toISOString().slice(0, 10);
+  const cursor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  if (!set.has(key(cursor))) cursor.setUTCDate(cursor.getUTCDate() - 1);
+  let streak = 0;
+  while (set.has(key(cursor))) {
+    streak += 1;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return streak;
 }
 
 function describeDatabaseUrl(raw: string | undefined): ReglagesState["dbInfo"] {

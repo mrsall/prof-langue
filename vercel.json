@@ -1,6 +1,7 @@
 {
   "regions": ["fra1"],
   "crons": [
-    { "path": "/api/rappels/envoyer", "schedule": "0 18 * * *" }
+    { "path": "/api/rappels/envoyer", "schedule": "5 8 * * *" },
+    { "path": "/api/rappels/envoyer", "schedule": "5 18 * * *" }
   ]
 }
