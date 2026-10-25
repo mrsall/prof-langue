@@ -2,6 +2,8 @@ import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
 import { getCostSettings } from "@/lib/settings";
 import { isLanguage } from "@/config/personalities";
 
+export const maxDuration = 30;
+
 /**
  * Enregistre une séance terminée (texte, bilan, statistiques) et alimente le
  * carnet de mots et la liste des erreurs. Sans base de données : ne fait rien.

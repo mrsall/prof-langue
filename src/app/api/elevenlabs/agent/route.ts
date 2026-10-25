@@ -1,4 +1,6 @@
 import { connection } from "next/server";
+
+export const maxDuration = 30;
 /**
  * Réglage automatique de l'agent ElevenLabs, pour éviter les clics dans le
  * dashboard : autorise les overrides dont l'app a besoin (consignes, première

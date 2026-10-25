@@ -1,6 +1,8 @@
 import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
 
+export const maxDuration = 30;
+
 /**
  * Carnet de mots avec révision espacée : J+1, J+3, J+7, J+21, puis tous les
  * 60 jours. Une réponse ratée ramène le mot au début.

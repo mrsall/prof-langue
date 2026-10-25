@@ -1,4 +1,6 @@
 import { connection } from "next/server";
+
+export const maxDuration = 30;
 import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
 
@@ -35,7 +37,7 @@ export async function GET() {
   };
   if (!state.db) return Response.json(state);
   try {
-    const sql = (await withTimeout(db(), 7000))!;
+    const sql = (await withTimeout(db(), 16000))!;
     const [en, fr, cost, reminder, push, today, month, due] = await withTimeout(Promise.all([
       getLevel("en"),
       getLevel("fr"),
@@ -47,7 +49,7 @@ export async function GET() {
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
       sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
-    ]), 5000);
+    ]), 8000);
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
       fr: fr ? { level: fr.level, date: fr.date } : null,

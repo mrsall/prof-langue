@@ -2,6 +2,8 @@ import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
 import { getLevel } from "@/lib/settings";
 
+export const maxDuration = 30;
+
 /**
  * Chiffres pour l'écran de suivi : minutes par semaine, série, niveau, mots.
  */

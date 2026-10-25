@@ -8,6 +8,8 @@ import { db, dbAvailable, withTimeout } from "@/lib/db";
 import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
 import { PERSONALITIES } from "@/config/personalities";
 
+export const maxDuration = 30;
+
 /**
  * Crée les identifiants d'une conversation ElevenLabs Agents et prépare les
  * consignes (personnalité, langue, correction, sujet, voix, vitesse) envoyées
