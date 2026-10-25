@@ -53,6 +53,7 @@ export async function POST(request: Request) {
           content: `Mode: ${personality.modeLabel} (${personality.character[language].slice(0, 300)}).
 Typical topics for this mode: ${examples.join("; ")}.
 Topics already used recently (do not repeat them, vary the angle): ${recent.length > 0 ? recent.join("; ") : "none"}.
+${personality.id === "debatteur" ? "For this mode, each topic must be a MOTION: one clear, debatable statement with two defensible sides (not a question). Mix books and ideas, technology, AI, society, sport, daily life. Avoid politics, religion and wars." : ""}
 Give 4 fresh, concrete topics adapted to this mode and to a beginner-to-intermediate speaker.`,
         },
       ],

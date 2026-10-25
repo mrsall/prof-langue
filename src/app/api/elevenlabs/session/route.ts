@@ -4,7 +4,7 @@ import { isSpeedKey, speedValue } from "@/config/speeds";
 import { isCorrectionLevel } from "@/config/correction";
 import { buildPrompt, type MemoryItem, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
 import { getLevel, LEVEL_DESCRIPTIONS } from "@/lib/settings";
-import { dbAvailable } from "@/lib/db";
+import { db, dbAvailable } from "@/lib/db";
 import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
 import { PERSONALITIES } from "@/config/personalities";
 
@@ -143,8 +143,17 @@ export async function POST(request: Request) {
       ? body.reviewWords.filter((w) => w && typeof w.word === "string").slice(0, 12).map((w) => ({ word: w.word, translation: String(w.translation ?? "") }))
       : [];
     let levelText: string | undefined;
+    let recycleWords: ReviewWord[] = [];
     if (dbAvailable()) {
       try {
+        if (kind === "conversation") {
+          const sql = await db();
+          const rows = sql
+            ? await sql<{ word: string; translation: string | null }[]>`select word, translation from words
+                where language = ${language} order by due_at asc limit 6`
+            : [];
+          recycleWords = rows.map((r) => ({ word: r.word, translation: r.translation ?? "" }));
+        }
         const info = await getLevel(language);
         if (info) {
           const desc = LEVEL_DESCRIPTIONS[info.level]?.[language];
@@ -168,6 +177,7 @@ export async function POST(request: Request) {
       kind,
       levelText,
       reviewWords,
+      recycleWords,
     });
     const testOpeners: Record<Language, string> = {
       en: "Hi Cherif! Let's have a quick five-minute chat so I can see where you are. No pressure at all. First: can you tell me your name and where you live?",

@@ -149,4 +149,6 @@ Plus tard : discussion à partir d'une vidéo YouTube ; app native avec Expo.
   - Carnet `/carnet` (révision espacée J+1/3/7/21 puis 60, `/api/mots`), révision à la voix (`kind: "revision"`).
   - Suivi `/suivi`, réglages V3 (coût/minute, plafond, rappel), rappels push (`public/sw.js`, clés VAPID en base, cron `vercel.json` à 18 h UTC), code d'accès `APP_PIN` via `src/proxy.ts`.
   - Cherif doit créer la base Supabase et renseigner `DATABASE_URL` (et `APP_PIN` conseillé) dans Vercel.
+  - Méthode pédagogique documentée dans `docs/methode-apprentissage.md` (production poussée, tournures toutes faites, tours de fluidité 4/3/2, incitations avant reformulations, aide à trouver ses mots : reformuler, mot exact, redire ; trame quoi/pourquoi/exemple). Débatteur = modérateur (motion, choix du camp) + adversaire + verdict. Bilan avec rubrique « Dire plus précisément ». Mots du carnet recyclés dans les discussions.
+  - Réglages affiche ce qui est lu dans `DATABASE_URL` (utilisateur, hôte, port, pooler) et une cause probable en cas d'échec.
 - Prochaine étape : V4 (prononciation, shadowing, suivi des sons) après validation.

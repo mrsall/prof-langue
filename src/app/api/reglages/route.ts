@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { db, dbAvailable, dbErrorMessage, setSetting } from "@/lib/db";
+import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, setSetting } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
 
 /**
@@ -8,6 +8,8 @@ import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings
 export type ReglagesState = {
   db: boolean;
   dbError: string | null;
+  /** Ce que l'app lit dans DATABASE_URL, sans le mot de passe. */
+  dbInfo: { user: string; host: string; port: string; pooler: boolean; passwordPlaceholder: boolean } | null;
   levels: { en: { level: string; date: string } | null; fr: { level: string; date: string } | null };
   cost: CostSettings;
   todayMinutes: number;
@@ -22,6 +24,7 @@ export async function GET() {
   const state: ReglagesState = {
     db: dbAvailable(),
     dbError: null,
+    dbInfo: describeDatabaseUrl(process.env.DATABASE_URL),
     levels: { en: null, fr: null },
     cost: DEFAULT_COST,
     todayMinutes: 0,
@@ -90,6 +93,22 @@ export async function POST(request: Request) {
     return GET();
   } catch (error) {
     return Response.json({ error: dbErrorMessage(error) }, { status: 502 });
+  }
+}
+
+function describeDatabaseUrl(raw: string | undefined): ReglagesState["dbInfo"] {
+  if (!raw) return null;
+  try {
+    const u = new URL(normalizeDatabaseUrl(raw));
+    return {
+      user: decodeURIComponent(u.username),
+      host: u.hostname,
+      port: u.port || "5432",
+      pooler: u.hostname.includes("pooler"),
+      passwordPlaceholder: /YOUR-PASSWORD/i.test(raw),
+    };
+  } catch {
+    return { user: "?", host: "chaîne illisible", port: "?", pooler: false, passwordPlaceholder: /YOUR-PASSWORD/i.test(raw) };
   }
 }
 

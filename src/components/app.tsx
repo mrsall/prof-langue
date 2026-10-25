@@ -612,7 +612,10 @@ function AppInner() {
             transcript: plain,
             corrections: result?.corrections ?? [],
             errors: result?.errors ?? [],
-            words: result?.words ?? [],
+            words: [
+              ...(result?.words ?? []),
+              ...(result?.upgrades ?? []).map((u) => ({ en: u.better, fr: `plutôt que « ${u.used} »` })),
+            ],
             encouragement: result?.encouragement ?? null,
             level: level?.level || null,
           }),
@@ -1435,6 +1438,23 @@ function BilanScreen({
         </section>
       ) : (
         <>
+          {bilan && bilan.upgrades.length > 0 && (
+            <section className="flex flex-col gap-2 rounded-2xl border border-accent/30 bg-elevated p-4">
+              <span className="text-sm font-semibold">Dire plus précisément</span>
+              {bilan.upgrades.map((u) => (
+                <div key={u.used} className="flex flex-col gap-1 rounded-xl bg-bg px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-x-2 text-sm">
+                    <span className="text-muted">{u.used}</span>
+                    <span className="text-muted" aria-hidden>
+                      →
+                    </span>
+                    <span className="font-semibold text-accent">{u.better}</span>
+                  </div>
+                  {u.why && <span className="text-xs text-muted">{u.why}</span>}
+                </div>
+              ))}
+            </section>
+          )}
           {bilan && bilan.errors.length > 0 && (
             <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
               <span className="text-sm font-semibold">À retenir</span>

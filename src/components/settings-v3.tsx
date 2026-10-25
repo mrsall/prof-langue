@@ -134,6 +134,13 @@ export function SettingsV3() {
           </span>
         </div>
         {state.dbError && <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{state.dbError}</p>}
+        {state.dbInfo && (
+          <p className="rounded-xl bg-bg px-3 py-2 font-mono text-xs text-muted">
+            Lu dans DATABASE_URL : utilisateur {state.dbInfo.user} · hôte {state.dbInfo.host} · port {state.dbInfo.port}
+            {state.dbInfo.pooler ? " · pooler ✓" : " · pas le pooler ✗ (prends l'onglet Transaction pooler)"}
+            {state.dbInfo.passwordPlaceholder ? " · mot de passe non remplacé ✗" : ""}
+          </p>
+        )}
         <p className="text-sm text-muted">
           {state.db
             ? "Les séances, le carnet de mots, le niveau et les réglages sont enregistrés."
