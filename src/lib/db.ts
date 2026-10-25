@@ -7,7 +7,31 @@ import postgres from "postgres";
  */
 type Sql = ReturnType<typeof postgres>;
 
-const globalForDb = globalThis as unknown as { __profLangueSql?: Sql; __profLangueSchema?: Promise<void> };
+const globalForDb = globalThis as unknown as {
+  __profLangueSql?: Sql;
+  __profLangueSchema?: Promise<void>;
+  __profLangueFailure?: { at: number; error: unknown };
+};
+
+/** Après un échec de connexion, on n'essaie plus pendant ce délai : l'app reste rapide. */
+const BREAKER_MS = 60_000;
+
+/** Attend au plus `ms` millisecondes, sinon lève une erreur CONNECT_TIMEOUT. */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(Object.assign(new Error(`pas de réponse en ${ms} ms`), { code: "CONNECT_TIMEOUT" })), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
 
 export function dbAvailable() {
   return Boolean(process.env.DATABASE_URL);
@@ -36,6 +60,11 @@ export function normalizeDatabaseUrl(raw: string) {
 export async function db(): Promise<Sql | null> {
   const rawUrl = process.env.DATABASE_URL;
   if (!rawUrl) return null;
+  const failure = globalForDb.__profLangueFailure;
+  if (failure && Date.now() - failure.at < BREAKER_MS) {
+    // Dernier essai raté il y a moins d'une minute : on ne refait pas attendre.
+    throw failure.error;
+  }
   const url = normalizeDatabaseUrl(rawUrl);
   if (!globalForDb.__profLangueSql) {
     globalForDb.__profLangueSql = postgres(url, {
@@ -43,18 +72,25 @@ export async function db(): Promise<Sql | null> {
       max: 1,
       prepare: false, // compatible avec le pooler Supabase en mode transaction
       idle_timeout: 20,
-      connect_timeout: 10,
+      connect_timeout: 6,
     });
   }
   const sql = globalForDb.__profLangueSql;
   if (!globalForDb.__profLangueSchema) {
-    globalForDb.__profLangueSchema = ensureSchema(sql).catch((error) => {
+    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql), 8000).catch((error) => {
       globalForDb.__profLangueSchema = undefined;
+      globalForDb.__profLangueFailure = { at: Date.now(), error };
       throw error;
     });
   }
   await globalForDb.__profLangueSchema;
+  globalForDb.__profLangueFailure = undefined;
   return sql;
+}
+
+/** Oublie le dernier échec (pour réessayer tout de suite, par exemple après un réglage). */
+export function resetDbBreaker() {
+  globalForDb.__profLangueFailure = undefined;
 }
 
 async function ensureSchema(sql: Sql) {

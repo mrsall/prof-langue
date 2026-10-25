@@ -5,7 +5,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import tls from "node:tls";
 import postgres from "postgres";
-import { normalizeDatabaseUrl } from "@/lib/db";
+import { normalizeDatabaseUrl, resetDbBreaker } from "@/lib/db";
 
 /**
  * Diagnostic pas à pas de la base de données : résolution du nom, connexion
@@ -30,6 +30,7 @@ function errText(e: unknown) {
 
 export async function GET() {
   await connection();
+  resetDbBreaker();
   const raw = process.env.DATABASE_URL;
   const steps: Step[] = [];
   if (!raw) return Response.json({ steps: [{ name: "Variable DATABASE_URL", ok: false, detail: "absente", ms: 0 }] });

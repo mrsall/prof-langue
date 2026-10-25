@@ -4,7 +4,7 @@ import { isSpeedKey, speedValue } from "@/config/speeds";
 import { isCorrectionLevel } from "@/config/correction";
 import { buildPrompt, type MemoryItem, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
 import { getLevel, LEVEL_DESCRIPTIONS } from "@/lib/settings";
-import { db, dbAvailable } from "@/lib/db";
+import { db, dbAvailable, withTimeout } from "@/lib/db";
 import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
 import { PERSONALITIES } from "@/config/personalities";
 
@@ -146,15 +146,20 @@ export async function POST(request: Request) {
     let recycleWords: ReviewWord[] = [];
     if (dbAvailable()) {
       try {
-        if (kind === "conversation") {
-          const sql = await db();
-          const rows = sql
-            ? await sql<{ word: string; translation: string | null }[]>`select word, translation from words
-                where language = ${language} order by due_at asc limit 6`
-            : [];
-          recycleWords = rows.map((r) => ({ word: r.word, translation: r.translation ?? "" }));
-        }
-        const info = await getLevel(language);
+        // La séance ne doit jamais attendre la base : 1,5 s maximum, sinon on fait sans.
+        const [rows, info] = await withTimeout(
+          (async () => {
+            const sql = await db();
+            const words =
+              sql && kind === "conversation"
+                ? await sql<{ word: string; translation: string | null }[]>`select word, translation from words
+                    where language = ${language} order by due_at asc limit 6`
+                : [];
+            return [words, await getLevel(language)] as const;
+          })(),
+          1500,
+        );
+        recycleWords = rows.map((r) => ({ word: r.word, translation: r.translation ?? "" }));
         if (info) {
           const desc = LEVEL_DESCRIPTIONS[info.level]?.[language];
           levelText =
