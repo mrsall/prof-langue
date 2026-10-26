@@ -166,6 +166,7 @@ const SCHEMA_STATEMENTS = [
   updated_at timestamptz not null default now(),
   primary key (language, phoneme)
 )`,
+  `alter table sessions add column if not exists engine text not null default 'elevenlabs'`,
 ];
 
 /**

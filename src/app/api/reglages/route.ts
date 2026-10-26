@@ -52,7 +52,7 @@ export async function GET() {
       getReminder(),
       sql<{ value: unknown }[]>`select value from settings where key = 'push'`,
       sql<{ seconds: number }[]>`select coalesce(sum(seconds), 0)::int as seconds from sessions
-        where (started_at at time zone 'Africa/Dakar')::date = (now() at time zone 'Africa/Dakar')::date`,
+        where engine <> 'eco' and (started_at at time zone 'Africa/Dakar')::date = (now() at time zone 'Africa/Dakar')::date`,
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
       sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,

@@ -9,7 +9,8 @@ Nouveau depuis la V3 :
 - **Prononciation** (écran Prononciation, aussi depuis le bilan) : la voix dit une phrase, tu la répètes, et chaque mot est noté et coloré (vert : bien, orange : à soigner, rouge : raté ou oublié). Appuie sur un mot pour l'entendre lentement. À la fin de la série : ta moyenne, les mots à refaire et les sons à soigner.
 - **Phrases utiles** : d'abord tes propres phrases corrigées des dernières séances et des phrases des personnages, puis les phrases où tu avais raté des mots, puis une réserve adaptée à ton niveau.
 - **Suivi** : moyenne de prononciation sur 30 jours, évolution par semaine, sons les moins réussis (anglais et français).
-- **Ce qu'il faut** : une clé Azure Speech (gratuite jusqu'à 5 heures par mois). La marche à suivre est dans Réglages et plus bas dans « 2 ter ». Sans la clé, tu peux écouter et répéter, mais sans note.
+- **Rien à payer** : c'est la reconnaissance vocale de ton téléphone qui écoute (Google sur Android, Apple sur iPhone). L'app compare mot à mot avec la phrase modèle, et Claude explique en une phrase comment placer le son raté. Pour une note son par son plus fine, Azure Speech reste possible en option (voir « 2 ter »), mais ce n'est pas nécessaire.
+- **Mode éco pour la conversation** (accueil → « Micro et vitesse » → « Mode éco ») : l'oreille et la voix du téléphone, le cerveau Claude. Zéro minute ElevenLabs. La voix est moins naturelle et, pour interrompre le personnage, tu appuies sur le micro au lieu de parler par-dessus. Les personnages, la correction, le bilan et le carnet sont les mêmes.
 - En français, l'objectif est d'être compris facilement, pas d'effacer l'accent : la note mesure la clarté.
 
 ### Ce qui venait de la V3 (niveau, bilan complet, carnet, suivi, rappels, plafond)
@@ -54,9 +55,11 @@ Si tu préfères le faire à la main : agent → **Security** → **Overrides** 
 2. Dans le projet, bouton **Connect** en haut → onglet **Transaction pooler** (ou « Session pooler ») → copie la chaîne qui commence par `postgresql://` et remplace `[YOUR-PASSWORD]` par ton mot de passe.
 3. Dans Vercel, ajoute cette chaîne sous le nom `DATABASE_URL`, puis Redeploy. Les tables se créent toutes seules à la première ouverture. La page **Réglages** indique « Base de données : Prête ».
 
-### 2 ter. La clé Azure pour la prononciation (V4, facultatif mais conseillé)
+### 2 ter. La clé Azure pour la prononciation (V4, facultatif)
 
-1. Va sur portal.azure.com et crée un compte (gratuit ; une carte est demandée mais le niveau Free n'est pas facturé).
+La prononciation fonctionne sans rien configurer, avec la reconnaissance vocale du téléphone. Azure n'apporte qu'une note son par son plus fine ; il demande une carte bancaire à l'inscription. Si tu veux l'essayer un jour :
+
+1. Va sur portal.azure.com et crée un compte (le niveau Free n'est pas facturé).
 2. « Créer une ressource », cherche **Speech** (Azure AI services), clique sur Créer.
 3. Région : **France Central** (ou West Europe). Niveau tarifaire : **Free F0** (5 heures d'audio par mois).
 4. Quand la ressource est prête, ouvre « Clés et point de terminaison » : copie **KEY 1** et note la **Région** (par exemple `francecentral`).
@@ -72,8 +75,8 @@ Vercel → ton projet → **Settings** → **Environment Variables** :
 | `ELEVENLABS_AGENT_ID` | l'Agent ID |
 | `ANTHROPIC_API_KEY` | ta clé Anthropic (mots du jour, corrections, sujets, niveau) |
 | `DATABASE_URL` | la chaîne de connexion Supabase (carnet, suivi, niveau, rappels) |
-| `AZURE_SPEECH_KEY` | la clé KEY 1 de ta ressource Azure Speech (prononciation, V4) |
-| `AZURE_SPEECH_REGION` | la région de cette ressource, ex. `francecentral` |
+| `AZURE_SPEECH_KEY` | facultatif : la clé KEY 1 d'une ressource Azure Speech (note son par son) |
+| `AZURE_SPEECH_REGION` | facultatif : la région de cette ressource, ex. `francecentral` |
 | `APP_PIN` | un code de ton choix pour protéger l'app (conseillé) |
 
 Coche les trois environnements. Après un ajout, relance un déploiement (**Deployments** → les trois points → **Redeploy**). Le fichier `.env.example` liste toutes les variables possibles.
@@ -91,7 +94,8 @@ Coche les trois environnements. Après un ajout, relance un déploiement (**Depl
 - Le bilan et le texte corrigé : clairs, utiles, lisibles en 30 secondes ?
 - Le carnet : les mots reviennent-ils au bon moment ? La révision à la voix te plaît-elle ?
 - Les rappels : les as-tu reçus à la bonne heure ?
-- La prononciation (V4) : ouvre Prononciation, appuie sur « Écouter », puis sur le gros bouton, répète, appuie à nouveau. Les couleurs correspondent-elles à ce que tu ressens ? Un mot que tu sais mal dire doit ressortir orange ou rouge. Fais aussi une série en français.
+- La prononciation (V4) : ouvre Prononciation, appuie sur « Écouter », puis sur le gros bouton et répète ; l'écoute s'arrête toute seule à la fin de ta phrase. Les couleurs correspondent-elles à ce que tu ressens ? Un mot que tu sais mal dire doit ressortir orange ou rouge, avec un conseil. Fais aussi une série en français.
+- Le mode éco : sur l'accueil, ouvre « Micro et vitesse », choisis « Mode éco (gratuit) », lance une séance. Le personnage doit parler avec la voix du téléphone et te répondre après chaque phrase. Dis-moi si la voix est supportable et si le délai est acceptable.
 - Depuis un bilan : le bouton « Répéter N phrases de la séance » doit ouvrir la prononciation avec tes phrases du jour.
 - Le plafond et le coût estimé : cohérents avec ta facture ElevenLabs ? (ajuste le coût par minute dans Réglages)
 
@@ -121,6 +125,7 @@ Structure :
 - `src/lib/progress.ts` : série de jours et minutes du jour (stockage local, V1).
 - `src/lib/db.ts` : connexion Postgres et création automatique des tables (`settings`, `sessions`, `words`, `errors`). `src/lib/settings.ts` : niveau, coût, rappel.
 - `src/app/api/sessions`, `/api/mots`, `/api/niveau`, `/api/suivi`, `/api/reglages`, `/api/rappels` (+ `/envoyer` pour le cron de `vercel.json`), `/api/acces`.
-- V4 : `src/lib/pronunciation.ts` (Azure Speech REST), `src/lib/recorder.ts` (WAV 16 kHz côté téléphone), `src/components/shadowing.tsx` (écran), `/api/prononciation` (note une phrase, garde notes et sons, jamais l'audio), `/api/prononciation/phrases` (phrases à répéter), `/api/tts` (lecture d'une phrase par ElevenLabs), `src/config/shadowing.ts` (réserve de phrases, seuils de couleur).
+- V4 : `src/lib/speech.ts` (reconnaissance et synthèse vocales du téléphone), `src/lib/pronunciation-text.ts` (comparaison mot à mot), `src/lib/pronunciation.ts` (Azure Speech REST, option), `src/lib/stt.ts` (Scribe ElevenLabs en secours), `src/lib/recorder.ts` (WAV 16 kHz côté téléphone), `src/components/shadowing.tsx` (écran), `/api/prononciation` (note une phrase, Claude explique le son, garde notes et sons, jamais l'audio), `/api/prononciation/phrases`, `/api/tts`, `src/config/shadowing.ts`.
+- Mode éco : `src/lib/eco-engine.ts` (oreille + voix du téléphone, boucle de dialogue), `/api/eco/reply` (une réplique de Claude avec les consignes de `src/lib/session-prompt.ts`, partagées avec la séance ElevenLabs), `/api/stt` (secours Scribe). Les séances éco sont enregistrées avec `engine = 'eco'` et un coût de 0.
 - `src/components/carnet.tsx`, `suivi.tsx`, `settings-v3.tsx`, `acces.tsx` : écrans V3. `src/proxy.ts` : code d'accès. `public/sw.js` : notifications.
 - `src/components/voice-test.tsx` et `/test-voix` : page de test des voix (V0).

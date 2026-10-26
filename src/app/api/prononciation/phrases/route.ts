@@ -3,6 +3,7 @@ import { isLanguage, type Language } from "@/config/personalities";
 import { SHADOWING_PHRASES, pickRandom, usableForShadowing } from "@/config/shadowing";
 import { db, dbAvailable, withTimeout } from "@/lib/db";
 import { pronunciationAvailable } from "@/lib/pronunciation";
+import { sttAvailable } from "@/lib/stt";
 import { getLevel } from "@/lib/settings";
 
 export const maxDuration = 30;
@@ -24,7 +25,10 @@ export async function GET(request: Request) {
   const lang = url.searchParams.get("lang") ?? "en";
   const language: Language = isLanguage(lang) ? lang : "en";
   const count = Math.min(10, Math.max(3, Number(url.searchParams.get("count") ?? "6") || 6));
-  const out: PhrasesResponse = { available: pronunciationAvailable(), db: dbAvailable(), language, phrases: [], sounds: [] };
+  // Noter est toujours possible avec la reconnaissance du téléphone ; Azure ou Scribe en plus côté serveur.
+  const out: PhrasesResponse = { available: true, db: dbAvailable(), language, phrases: [], sounds: [] };
+  void pronunciationAvailable;
+  void sttAvailable;
 
   let beginner = true;
   if (out.db) {

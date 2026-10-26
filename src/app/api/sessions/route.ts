@@ -22,6 +22,8 @@ type Body = {
   words?: { en: string; fr: string }[];
   encouragement?: string | null;
   level?: string | null;
+  /** "elevenlabs" (minutes payantes) ou "eco" (téléphone + Claude, gratuit). */
+  engine?: string;
 };
 
 export async function POST(request: Request) {
@@ -37,14 +39,15 @@ export async function POST(request: Request) {
   try {
     const sql = (await db())!;
     const cost = await getCostSettings();
-    const costFcfa = Math.round((seconds / 60) * cost.perMinuteFcfa);
+    const engine = body.engine === "eco" ? "eco" : "elevenlabs";
+    const costFcfa = engine === "eco" ? 0 : Math.round((seconds / 60) * cost.perMinuteFcfa);
     const rows = await sql<{ id: number }[]>`insert into sessions
-      (kind, language, personality, topic, seconds, user_turns, user_share, transcript, corrections, errors, words, encouragement, level, cost_fcfa)
+      (kind, language, personality, topic, seconds, user_turns, user_share, transcript, corrections, errors, words, encouragement, level, cost_fcfa, engine)
       values (${body.kind ?? "conversation"}, ${language}, ${body.personality ?? "ami"}, ${body.topic ?? null}, ${seconds},
         ${Math.round(Number(body.userTurns ?? 0))}, ${Math.round(Number(body.userShare ?? 0))},
         ${sql.json((body.transcript ?? []) as never)}, ${sql.json((body.corrections ?? []) as never)},
         ${sql.json((body.errors ?? []) as never)}, ${sql.json((body.words ?? []) as never)},
-        ${body.encouragement ?? null}, ${body.level ?? null}, ${costFcfa})
+        ${body.encouragement ?? null}, ${body.level ?? null}, ${costFcfa}, ${engine})
       returning id`;
     const sessionId = rows[0]?.id ?? null;
 

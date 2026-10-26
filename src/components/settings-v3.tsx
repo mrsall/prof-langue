@@ -185,10 +185,8 @@ export function SettingsV3() {
 
       <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">Prononciation (Azure Speech)</h2>
-          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.pronunciation.configured ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>
-            {state.pronunciation.configured ? "Prête" : "À configurer"}
-          </span>
+          <h2 className="text-base font-semibold">Prononciation</h2>
+          <span className="rounded-full bg-speaking/15 px-2.5 py-1 text-xs font-semibold text-speaking">{state.pronunciation.configured ? "Azure" : "Téléphone (gratuit)"}</span>
         </div>
         {state.pronunciation.configured ? (
           <p className="text-sm text-muted">
@@ -197,7 +195,10 @@ export function SettingsV3() {
           </p>
         ) : (
           <div className="flex flex-col gap-2 text-sm text-muted">
-            <p>Pour noter ta prononciation mot par mot (5 heures gratuites par mois, puis environ 1 $ l&apos;heure) :</p>
+            <p>
+              Par défaut, la prononciation est notée avec la reconnaissance vocale du téléphone, gratuite : un mot compris est vert, un mot déformé orange ou rouge, et Claude explique le son raté. Rien à configurer.
+            </p>
+            <p>Facultatif, pour une note son par son plus fine : Azure Speech (5 heures gratuites par mois, carte bancaire demandée à l&apos;inscription) :</p>
             <ol className="list-decimal space-y-1 pl-5">
               <li>Va sur portal.azure.com, crée un compte gratuit si besoin.</li>
               <li>« Créer une ressource » → cherche <strong>Speech</strong> (Azure AI services) → Créer.</li>
