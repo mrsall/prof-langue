@@ -1,7 +1,7 @@
 import { connection } from "next/server";
 
 export const maxDuration = 30;
-import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, setSetting, withTimeout } from "@/lib/db";
+import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, SCHEMA_SQL, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
 import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
 
@@ -24,6 +24,8 @@ export type ReglagesState = {
   streak: number | null;
   /** V4 : évaluation de la prononciation (Azure Speech). */
   pronunciation: { configured: boolean; region: string | null; locales: { en: string; fr: string } };
+  /** SQL complet du schéma, pour l'appliquer à la main dans Supabase si besoin. */
+  schemaSql: string;
 };
 
 export async function GET() {
@@ -41,6 +43,7 @@ export async function GET() {
     pinEnabled: Boolean(process.env.APP_PIN),
     streak: null,
     pronunciation: { configured: pronunciationAvailable(), region: process.env.AZURE_SPEECH_REGION?.trim().toLowerCase() || null, locales: { en: localeFor("en"), fr: localeFor("fr") } },
+    schemaSql: SCHEMA_SQL,
   };
   if (!state.db) return Response.json(state);
   try {

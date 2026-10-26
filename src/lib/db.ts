@@ -77,7 +77,7 @@ export async function db(): Promise<Sql | null> {
   }
   const sql = globalForDb.__profLangueSql;
   if (!globalForDb.__profLangueSchema) {
-    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql, url), 15000).catch((error) => {
+    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql, url), 25000).catch((error) => {
       globalForDb.__profLangueSchema = undefined;
       globalForDb.__profLangueFailure = { at: Date.now(), error };
       throw error;
@@ -175,7 +175,13 @@ const SCHEMA_STATEMENTS = [
  * 2. sinon, les commandes passent une par une sur une connexion jetable,
  *    fermée juste après, et la connexion principale reste intacte.
  */
-async function ensureSchema(sql: Sql, url: string) {
+/** Le schéma complet, à coller dans l'éditeur SQL de Supabase si l'app n'arrive pas à le créer elle-même. */
+export const SCHEMA_SQL = SCHEMA_STATEMENTS.map((s) => `${s};`).join("\n\n");
+
+export type SchemaStepResult = { statement: string; ms: number; error: string | null };
+
+/** Vérifie en une requête que tout ce dont l'app a besoin existe. */
+export async function schemaComplete(sql: Sql) {
   const [row] = await sql<{ ok: boolean }[]>`select
     to_regclass('public.settings') is not null
     and to_regclass('public.sessions') is not null
@@ -185,8 +191,16 @@ async function ensureSchema(sql: Sql, url: string) {
     and to_regclass('public.pron_attempts') is not null
     and to_regclass('public.pron_sounds') is not null
     and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'engine') as ok`;
-  if (row?.ok) return;
+  return Boolean(row?.ok);
+}
 
+/**
+ * Applique les instructions du schéma une par une, sur une connexion jetable,
+ * sans jamais attendre un verrou plus de 4 s ni une instruction plus de 12 s
+ * (une table ouverte dans l'éditeur Supabase suffit à bloquer un « alter table »).
+ * Renvoie le détail de chaque étape ; s'arrête à la première erreur.
+ */
+export async function applySchema(url: string): Promise<SchemaStepResult[]> {
   const setup = postgres(url, {
     ssl: url.includes("localhost") ? undefined : "require",
     max: 1,
@@ -195,12 +209,39 @@ async function ensureSchema(sql: Sql, url: string) {
     connect_timeout: 8,
     onnotice: () => undefined, // « existe déjà » n'est pas une erreur
   });
+  const results: SchemaStepResult[] = [];
   try {
+    await setup.unsafe("set lock_timeout = '4s'; set statement_timeout = '12s'");
     for (const statement of SCHEMA_STATEMENTS) {
-      await setup.unsafe(statement);
+      const start = Date.now();
+      try {
+        await setup.unsafe(statement);
+        results.push({ statement: statement.split("\n")[0].slice(0, 80), ms: Date.now() - start, error: null });
+      } catch (error) {
+        const e = error as { code?: string; message?: string };
+        results.push({ statement: statement.split("\n")[0].slice(0, 80), ms: Date.now() - start, error: `${e.code ?? ""} ${e.message ?? String(error)}`.trim() });
+        break;
+      }
     }
   } finally {
     await setup.end({ timeout: 2 }).catch(() => undefined);
+  }
+  return results;
+}
+
+async function ensureSchema(sql: Sql, url: string) {
+  let complete = false;
+  try {
+    complete = await schemaComplete(sql);
+  } catch (error) {
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { stage: "connexion" });
+  }
+  if (complete) return;
+  const steps = await applySchema(url);
+  const failed = steps.find((s) => s.error);
+  if (failed) {
+    const code = failed.error?.split(" ")[0] ?? "";
+    throw Object.assign(new Error(`Création des tables bloquée à « ${failed.statement} » : ${failed.error}`), { code: code || "SCHEMA", stage: "schema", step: failed.statement });
   }
 }
 
@@ -222,11 +263,17 @@ export async function setSetting(key: string, value: unknown) {
 /** Erreur lisible pour Cherif quand la base ne répond pas, avec la cause probable. */
 export function dbErrorMessage(error: unknown) {
   console.error("Base de données", error);
-  const e = error as { code?: string; message?: string; errno?: string } | undefined;
+  const e = error as { code?: string; message?: string; errno?: string; stage?: string; step?: string } | undefined;
   const code = String(e?.code ?? e?.errno ?? "");
   const msg = String(e?.message ?? "").toLowerCase();
   const url = process.env.DATABASE_URL ?? "";
   const hint = (() => {
+    if (code === "55P03" || msg.includes("lock timeout") || msg.includes("lock_timeout")) {
+      return `Le serveur répond, mais une autre connexion bloque la mise à jour des tables (${e?.step ?? "verrou"}). Ferme l'éditeur de tables ou l'éditeur SQL de Supabase, attends une minute, puis réessaie.`;
+    }
+    if (e?.stage === "schema") {
+      return `Le serveur répond, mais la création des tables a échoué : ${String(e?.message ?? "").slice(0, 160)}. Tu peux coller le SQL de secours (Réglages → Base de données) dans l'éditeur SQL de Supabase.`;
+    }
     if (url.includes("[YOUR-PASSWORD]") || url.includes("YOUR-PASSWORD")) {
       return "La chaîne contient encore [YOUR-PASSWORD] : remplace-le par le mot de passe de la base (sans les crochets).";
     }
@@ -238,6 +285,9 @@ export function dbErrorMessage(error: unknown) {
     }
     if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
       return "Adresse du serveur introuvable : la chaîne est sans doute incomplète ou mal copiée.";
+    }
+    if (code === "CONNECT_TIMEOUT" && msg.includes("pas de réponse en")) {
+      return `Le serveur n'a pas fini en ${msg.replace("pas de réponse en ", "")} (connexion lente ou tables bloquées). Lance le diagnostic dans Réglages pour voir l'étape qui traîne.`;
     }
     if (code === "ENETUNREACH" || code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "CONNECT_TIMEOUT" || msg.includes("timeout")) {
       return "Serveur injoignable. Utilise la chaîne de l'onglet Transaction pooler (port 6543), pas la connexion directe (port 5432), qui n'est pas accessible depuis Vercel.";

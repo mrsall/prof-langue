@@ -182,6 +182,27 @@ export function SettingsV3() {
             )}
           </div>
         )}
+        {state.db && (
+          <details className="rounded-xl bg-bg px-3 py-2 text-sm">
+            <summary className="cursor-pointer font-semibold">SQL de secours (si la création des tables bloque)</summary>
+            <p className="mt-2 text-xs text-muted">
+              Dans Supabase → SQL Editor → New query, colle ce texte et clique sur Run. Chaque ligne est sans danger si la table existe déjà. Puis reviens ici et appuie sur Réessayer.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(state.schemaSql).then(
+                  () => setPushMessage("SQL copié. Colle-le dans l'éditeur SQL de Supabase."),
+                  () => setPushMessage("Copie impossible : sélectionne le texte à la main."),
+                );
+              }}
+              className="mt-2 h-10 w-full rounded-xl border border-line bg-elevated text-sm font-semibold"
+            >
+              Copier le SQL
+            </button>
+            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted">{state.schemaSql}</pre>
+          </details>
+        )}
         <p className="text-sm text-muted">
           {state.db
             ? "Les séances, le carnet de mots, le niveau et les réglages sont enregistrés."
