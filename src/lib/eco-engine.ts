@@ -3,7 +3,8 @@
 import type { Language } from "@/config/personalities";
 import type { TranscriptLine } from "@/lib/prompt";
 import { startWavRecorder, type WavRecorder } from "@/lib/recorder";
-import { LOCALES, recognizeOnce, speakText, speechRecognitionAvailable, speechSynthesisAvailable, type RecognizeHandle, type SpeakHandle } from "@/lib/speech";
+import { LOCALES, recognizeOnce, speechRecognitionAvailable, type RecognizeHandle, type SpeakHandle } from "@/lib/speech";
+import type { Speaker } from "@/lib/voice-engine";
 
 /**
  * Mode éco : la conversation sans ElevenLabs Agents.
@@ -28,6 +29,8 @@ export type EcoOptions = {
   /** Corps envoyé à /api/eco/reply (personnalité, langue, sujet…), sans le transcript. */
   body: Record<string, unknown>;
   language: Language;
+  /** Qui lit les répliques (ElevenLabs, Kokoro ou le téléphone). */
+  speaker: Speaker;
   rate: number;
   handsFree: boolean;
   /** Historique déjà échangé (reprise après changement de réglage). */
@@ -79,10 +82,6 @@ export class EcoEngine {
   }
 
   async start() {
-    if (!speechSynthesisAvailable()) {
-      this.options.callbacks.onError("Ce téléphone n'a pas de voix de synthèse. Utilise le mode ElevenLabs.");
-      return false;
-    }
     let first = this.options.firstMessage?.trim() || null;
     if (!first) {
       const reply = await this.ask([]);
@@ -163,7 +162,7 @@ export class EcoEngine {
     this.history.push({ role: "agent", text });
     this.options.callbacks.onMessage({ role: "agent", message: text });
     this.setMode("speaking");
-    const handle = speakText(text, { language: this.options.language, rate });
+    const handle = this.options.speaker.speak(text, rate);
     this.speaking = handle;
     try {
       await handle.done;

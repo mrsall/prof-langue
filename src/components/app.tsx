@@ -15,6 +15,7 @@ import {
 } from "@/config/personalities";
 import { SPEEDS, SPEED_ORDER, SPEED_RESUME_MESSAGES, isSpeedKey, speedValue, type SpeedKey } from "@/config/speeds";
 import { EcoEngine, type EcoMode } from "@/lib/eco-engine";
+import { VOICE_CHOICES, VOICE_CHOICE_KEY, createSpeaker, parseVoiceChoice, unlockAudio, type VoiceChoice } from "@/lib/voice-engine";
 import { CORRECTION_LEVELS, CORRECTION_ORDER, isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
 import { randomTopic } from "@/config/topics";
 import { usableForShadowing } from "@/config/shadowing";
@@ -101,6 +102,8 @@ function AppInner() {
   const handsFree = talkMode === "mains-libres";
   const [savedEngine, setSavedEngine] = useLocalStorage(ENGINE_KEY);
   const engine: Engine = savedEngine === "eco" ? "eco" : "elevenlabs";
+  const [savedVoiceChoice, setSavedVoiceChoice] = useLocalStorage(VOICE_CHOICE_KEY);
+  const voiceChoice: VoiceChoice = parseVoiceChoice(savedVoiceChoice);
   const [savedLanguage, setSavedLanguage] = useLocalStorage(LANGUAGE_KEY);
   const language: Language = isLanguage(savedLanguage) ? savedLanguage : "en";
   const [savedMode, setSavedMode] = useLocalStorage(MODE_KEY);
@@ -380,6 +383,8 @@ function AppInner() {
         fallbackTried.current = false;
       }
       setPreparing(true);
+      // Dans le geste d'appui : autorise le lecteur audio à démarrer tout seul ensuite (iPhone).
+      if (p.engine === "eco") unlockAudio();
       try {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -393,7 +398,21 @@ function AppInner() {
           ending.current = false;
           setEcoStatus("connecting");
           const past = context ? transcriptRef.current.map((l) => ({ role: l.role, text: l.text })) : [];
+          let speaker = createSpeaker(voiceChoice, { language: p.language, personalityId: p.personality.id });
+          try {
+            if (speaker.choice === "kokoro") setNotice("Chargement de la voix Kokoro (90 Mo la première fois)…");
+            await speaker.preload((prog) => {
+              if (prog.status === "progress" && typeof prog.progress === "number") setNotice(`Chargement de la voix Kokoro : ${Math.round(prog.progress)} %`);
+            });
+            setNotice(null);
+          } catch (error) {
+            // Voix choisie indisponible : on continue avec ElevenLabs (ou le téléphone).
+            console.error("Voix indisponible", error);
+            speaker = createSpeaker("eleven", { language: p.language, personalityId: p.personality.id });
+            setNotice(`La voix ${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label ?? ""} n'a pas pu se charger : ElevenLabs prend le relais.`);
+          }
           const eng = new EcoEngine({
+            speaker,
             body: {
               personality: p.personality.id,
               language: p.language,
@@ -529,7 +548,7 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine],
+    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine, voiceChoice],
   );
 
   useEffect(() => {
@@ -787,6 +806,8 @@ function AppInner() {
         onTalkModeChange={setSavedTalkMode}
         engine={engine}
         onEngineChange={setSavedEngine}
+        voiceChoice={voiceChoice}
+        onVoiceChoiceChange={setSavedVoiceChoice}
         streak={remote?.db && remote.streak != null ? Math.max(remote.streak, progress.streak) : progress.streak}
         minutesToday={remote?.db ? Math.max(remote.todayMinutes, progress.minutesToday) : progress.minutesToday}
         goalMinutes={progress.goalMinutes}
@@ -886,7 +907,7 @@ function AppInner() {
             <span className="text-xs text-muted">
               {p.kind === "test" ? "Test de niveau" : p.kind === "revision" ? "Révision de vocabulaire" : p.personality.modeLabel} · {LANGUAGE_LABELS[p.language].toLowerCase()}
               {p.topic.title ? ` · ${p.topic.title}` : ""}
-              {isEco ? " · mode éco" : ""}
+              {isEco ? ` · éco (${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label.split(" ")[0] ?? "voix"})` : ""}
             </span>
           </div>
         </div>
@@ -1116,6 +1137,8 @@ function HomeScreen({
   onTalkModeChange,
   engine,
   onEngineChange,
+  voiceChoice,
+  onVoiceChoiceChange,
   streak,
   minutesToday,
   goalMinutes,
@@ -1136,6 +1159,8 @@ function HomeScreen({
   onTalkModeChange: (m: TalkMode) => void;
   engine: Engine;
   onEngineChange: (e: Engine) => void;
+  voiceChoice: VoiceChoice;
+  onVoiceChoiceChange: (v: VoiceChoice) => void;
   streak: number;
   minutesToday: number;
   goalMinutes: number;
@@ -1290,8 +1315,8 @@ function HomeScreen({
             <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Qui fait la voix">
               {(
                 [
-                  { key: "elevenlabs", label: "Voix naturelle" },
-                  { key: "eco", label: "Mode éco (gratuit)" },
+                  { key: "elevenlabs", label: "Conversation ElevenLabs" },
+                  { key: "eco", label: "Mode éco" },
                 ] as { key: Engine; label: string }[]
               ).map((e) => (
                 <button
@@ -1308,9 +1333,28 @@ function HomeScreen({
             </div>
             <p className="px-1 text-xs text-muted">
               {engine === "eco"
-                ? "Oreille et voix du téléphone, cerveau Claude : zéro minute ElevenLabs. Voix moins naturelle ; pour l'interrompre, appuie sur le micro."
-                : "ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes."}
+                ? "Le téléphone écoute gratuitement, Claude réfléchit, et seule la lecture de la réponse est confiée à la voix choisie : zéro minute de conversation ElevenLabs. Pour interrompre le personnage, appuie sur le micro."
+                : "Conversation en temps réel ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes de conversation."}
             </p>
+            {engine === "eco" && (
+              <>
+                <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix du mode éco">
+                  {VOICE_CHOICES.map((v) => (
+                    <button
+                      key={v.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={voiceChoice === v.key}
+                      onClick={() => onVoiceChoiceChange(v.key)}
+                      className={`h-10 rounded-lg px-1 text-xs font-medium leading-tight ${voiceChoice === v.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="px-1 text-xs text-muted">{VOICE_CHOICES.find((v) => v.key === voiceChoice)?.hint}</p>
+              </>
+            )}
           </div>
           <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Vitesse de la voix">
             {SPEEDS.map((s) => (

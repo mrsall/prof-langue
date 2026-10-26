@@ -10,6 +10,9 @@ import { LOCALES, recognizeOnce, speakText, speechRecognitionAvailable, speechSy
 import { scoreTone, type ScoreTone } from "@/config/shadowing";
 import { LANGUAGE_LABELS, isLanguage, type Language } from "@/config/personalities";
 import { useLocalStorage } from "@/lib/use-local-storage";
+import { VOICE_CHOICES, VOICE_CHOICE_KEY, parseVoiceChoice, type VoiceChoice } from "@/lib/voice-engine";
+import { kokoroLoaded, loadKokoro, synthesize } from "@/lib/kokoro";
+import { kokoroVoiceFor } from "@/config/kokoro-voices";
 
 /**
  * V4 — Shadowing : une phrase est lue par la voix, Cherif la répète, chaque mot
@@ -23,7 +26,6 @@ import { useLocalStorage } from "@/lib/use-local-storage";
 const MAX_RECORD_SECONDS = 15;
 const HANDOFF_KEY = "prof-langue:shadowing";
 const LANGUAGE_KEY = "prof-langue:language";
-const TTS_KEY = "prof-langue:tts-voice";
 
 type Status = "idle" | "playing" | "recording" | "scoring";
 type Capture = "azure" | "phone" | "scribe" | "none";
@@ -48,8 +50,10 @@ export function Shadowing() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<Done[]>([]);
   const [seed, setSeed] = useState(0);
-  const [savedTts, setSavedTts] = useLocalStorage(TTS_KEY);
-  const phoneVoice = savedTts === "phone";
+  const [savedVoice, setSavedVoice] = useLocalStorage(VOICE_CHOICE_KEY);
+  const voiceChoice: VoiceChoice = parseVoiceChoice(savedVoice);
+  const phoneVoice = voiceChoice === "phone";
+  const [kokoroNote, setKokoroNote] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakRef = useRef<SpeakHandle | null>(null);
   const recorderRef = useRef<WavRecorder | null>(null);
@@ -171,6 +175,34 @@ export function Shadowing() {
     setPhase("playing");
   }
 
+  async function playWithKokoro(text: string, speed: number) {
+    if (!language) return;
+    setStatusPlaying();
+    try {
+      if (!kokoroLoaded()) setKokoroNote("Chargement de la voix Kokoro (90 Mo la première fois)…");
+      await loadKokoro({
+        onProgress: (p) => {
+          if (p.status === "progress" && typeof p.progress === "number") setKokoroNote(`Chargement de la voix Kokoro : ${Math.round(p.progress)} %`);
+        },
+      });
+      setKokoroNote(null);
+      const result = await synthesize(text, { language: "en", voice: kokoroVoiceFor("prof"), speed: Math.max(0.6, Math.min(1.4, speed)) });
+      const audio = getAudio();
+      const url = URL.createObjectURL(result.blob);
+      audio.src = url;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setPhase((s) => (s === "playing" ? "idle" : s));
+      };
+      audio.onerror = () => setPhase((s) => (s === "playing" ? "idle" : s));
+      await audio.play();
+    } catch (e) {
+      setKokoroNote(null);
+      setPhase((s) => (s === "playing" ? "idle" : s));
+      setError(`Kokoro indisponible (${e instanceof Error ? e.message : "erreur"}). Choisis une autre voix.`);
+    }
+  }
+
   function play(text: string, speed: number) {
     if (!language) return;
     stopPlayback();
@@ -178,8 +210,12 @@ export function Shadowing() {
       playWithPhone(text, speed);
       return;
     }
+    if (voiceChoice === "kokoro" && language === "en") {
+      void playWithKokoro(text, speed);
+      return;
+    }
     const audio = getAudio();
-    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}`;
+    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof`;
     audio.onended = () => setPhase((s) => (s === "playing" ? "idle" : s));
     audio.onerror = () => {
       // La voix naturelle n'a pas pu être chargée : on lit avec la voix du téléphone.
@@ -388,11 +424,23 @@ export function Shadowing() {
                 Lentement
               </button>
             </div>
-            {canSpeakPhone && (
-              <button type="button" onClick={() => setSavedTts(phoneVoice ? "eleven" : "phone")} className="self-center text-xs text-muted underline">
-                Voix : {phoneVoice ? "téléphone (gratuite)" : "naturelle (ElevenLabs)"} · changer
-              </button>
-            )}
+            <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix qui lit la phrase">
+              {VOICE_CHOICES.map((v) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={voiceChoice === v.key}
+                  disabled={phase === "playing"}
+                  onClick={() => setSavedVoice(v.key)}
+                  className={`h-9 rounded-lg px-1 text-[11px] font-medium leading-tight ${voiceChoice === v.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+            {voiceChoice === "kokoro" && language === "fr" && <p className="text-center text-xs text-muted">Kokoro ne parle qu&apos;anglais : en français, c&apos;est ElevenLabs qui lit.</p>}
+            {kokoroNote && <p className="text-center text-xs text-muted">{kokoroNote}</p>}
           </section>
 
           {result && (
