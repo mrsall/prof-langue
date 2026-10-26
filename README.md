@@ -2,7 +2,7 @@
 
 Web app mobile pour parler anglais (puis français) à voix haute avec une IA qui répond avec une voix naturelle. Le cahier des charges complet est dans `CLAUDE.md`.
 
-## Où en est le projet : V4 (prononciation, shadowing, suivi des sons)
+## Où en est le projet : V4 validée (prononciation, shadowing, suivi des sons, mode éco)
 
 Nouveau depuis la V3 :
 
