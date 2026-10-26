@@ -113,7 +113,7 @@ export async function GET() {
   );
   steps.push({ name: "Sécurisation (TLS)", ok: !tlsRes.error, detail: tlsRes.error ? errText(tlsRes.error) : (tlsRes.value ?? ""), ms: tlsRes.ms });
 
-  const sql = postgres(url.toString(), { ssl: "require", max: 1, prepare: false, connect_timeout: 8, idle_timeout: 2 });
+  const sql = postgres(url.toString(), { ssl: host === "localhost" ? undefined : "require", max: 1, prepare: false, connect_timeout: 8, idle_timeout: 2 });
   const pgRes = await timed(async () => {
     const rows = await sql<{ now: string; version: string }[]>`select now()::text as now, version() as version`;
     return rows[0]?.version?.split(" on ")[0] ?? "ok";
