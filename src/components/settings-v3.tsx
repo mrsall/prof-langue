@@ -215,6 +215,9 @@ export function SettingsV3() {
           <h2 className="text-base font-semibold">Prononciation</h2>
           <span className="rounded-full bg-speaking/15 px-2.5 py-1 text-xs font-semibold text-speaking">{state.pronunciation.configured ? "Azure" : "Téléphone (gratuit)"}</span>
         </div>
+        <p className="text-sm text-muted">
+          Voix gratuite à l&apos;essai : <Link href="/test-kokoro" className="underline">tester Kokoro</Link>, une voix naturelle qui tourne dans le téléphone, sans serveur ni abonnement.
+        </p>
         {state.pronunciation.configured ? (
           <p className="text-sm text-muted">
             Région {state.pronunciation.region} · anglais {state.pronunciation.locales.en} · français {state.pronunciation.locales.fr}. Les notes se trouvent dans{" "}
