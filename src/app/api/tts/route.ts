@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { isLanguage } from "@/config/personalities";
-import { listFrenchVoices, pickFrenchVoice } from "@/lib/french-voices";
+import { resolveVoiceId } from "@/lib/tts-voices";
 
 export const maxDuration = 30;
 
@@ -9,9 +9,8 @@ export const maxDuration = 30;
  * ou un mot raté rejoué lentement). GET pour que le téléphone puisse la jouer
  * directement dans un lecteur audio au moment où Cherif appuie.
  *
- *   /api/tts?text=...&lang=en|fr&speed=0.7..1.2
+ *   /api/tts?text=...&lang=en|fr&speed=0.7..1.2&personality=ami&role=main|judge
  */
-const DEFAULT_VOICE_EN = process.env.ELEVENLABS_VOICE_TTS_EN || "JBFqnCBsobJjWmhhKeHm"; // George
 const MODEL = process.env.ELEVENLABS_TTS_MODEL || "eleven_flash_v2_5";
 
 export async function GET(request: Request) {
@@ -25,14 +24,9 @@ export async function GET(request: Request) {
   const speed = Math.min(1.2, Math.max(0.7, Number(url.searchParams.get("speed") ?? "1") || 1));
   if (!text) return Response.json({ error: "Texte manquant." }, { status: 400 });
 
-  let voiceId = DEFAULT_VOICE_EN;
-  if (language === "fr") {
-    voiceId = process.env.ELEVENLABS_VOICE_TTS_FR || "";
-    if (!voiceId) {
-      const voices = await listFrenchVoices(apiKey).catch(() => []);
-      voiceId = pickFrenchVoice(voices, "prof", "female", 0) ?? voices[0]?.voiceId ?? DEFAULT_VOICE_EN;
-    }
-  }
+  const personalityId = url.searchParams.get("personality") || null;
+  const role = url.searchParams.get("role") === "judge" ? "judge" : "main";
+  const voiceId = await resolveVoiceId({ apiKey, language, personalityId, role });
 
   let res: Response;
   try {
