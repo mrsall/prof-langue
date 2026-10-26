@@ -24,17 +24,27 @@ export function Carnet() {
   useEffect(() => {
     let active = true;
     fetch("/api/mots")
-      .then(async (res) => (await res.json()) as State)
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as Partial<State> & { error?: string };
+        if (res.status === 401) {
+          router.push("/acces");
+          return null;
+        }
+        if (!res.ok || typeof body.db !== "boolean") {
+          return { db: true, due: [], all: [], error: body.error ?? `Le serveur a répondu ${res.status}. Réessaie dans un instant.` } as State;
+        }
+        return body as State;
+      })
       .then((data) => {
-        if (active) setState(data);
+        if (active && data) setState(data);
       })
       .catch(() => {
-        if (active) setState({ db: true, due: [], all: [], error: "Pas de connexion. Réessaie." });
+        if (active) setState({ db: true, due: [], all: [], error: "Pas de connexion au serveur de l'app (réseau coupé ou trop lent)." });
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [router]);
 
   const due = (state?.due ?? []).filter((w) => w.language === language);
   const all = (state?.all ?? []).filter((w) => w.language === language);
@@ -96,7 +106,12 @@ export function Carnet() {
           Le carnet a besoin de la base de données. Voir <Link href="/reglages" className="underline">Réglages</Link>.
         </section>
       ) : state.error ? (
-        <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{state.error}</p>
+        <section className="flex flex-col gap-2 rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm">
+          <p className="text-danger">{state.error}</p>
+          <Link href="/reglages#diagnostic" className="h-10 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
+            Lancer le diagnostic
+          </Link>
+        </section>
       ) : (
         <>
           <section className="flex flex-col gap-3 rounded-3xl border border-line bg-elevated p-4">

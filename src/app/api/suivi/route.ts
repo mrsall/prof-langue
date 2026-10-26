@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
+import { db, dbAvailable, dbErrorMessage, withTimeout } from "@/lib/db";
 import { getLevel } from "@/lib/settings";
 
 export const maxDuration = 30;
@@ -40,8 +40,8 @@ export async function GET() {
   };
   if (!empty.db) return Response.json(empty);
   try {
-    const sql = (await db())!;
-    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds] = await Promise.all([
+    const sql = (await withTimeout(db(), 16000))!;
+    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds] = await withTimeout(Promise.all([
       sql<{ start: string; seconds: number }[]>`select to_char(date_trunc('week', started_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
@@ -62,7 +62,7 @@ export async function GET() {
         where created_at > now() - interval '30 days'`,
       sql<{ language: string; phoneme: string; attempts: number; score: number }[]>`select language, phoneme, attempts,
         (score_sum / greatest(attempts, 1))::int as score from pron_sounds where attempts >= 3 order by 4 asc limit 6`,
-    ]);
+    ]), 20000);
     return Response.json({
       ...empty,
       weeks: weeks.map((w) => ({ start: w.start, minutes: Math.round(w.seconds / 60) })),

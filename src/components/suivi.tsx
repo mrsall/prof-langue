@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { SuiviData } from "@/app/api/suivi/route";
 import { findPersonality } from "@/config/personalities";
 
@@ -10,21 +11,34 @@ import { findPersonality } from "@/config/personalities";
  */
 export function Suivi() {
   const [data, setData] = useState<SuiviData | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const router = useRouter();
 
   useEffect(() => {
     let active = true;
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, byMode: [], monthFcfa: 0, pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
-      .then(async (res) => (await res.json()) as SuiviData)
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
+        if (res.status === 401) {
+          router.push("/acces");
+          return null;
+        }
+        if (!res.ok || typeof body.db !== "boolean") {
+          return { ...empty, error: body.error ?? `Le serveur a répondu ${res.status}. Réessaie dans un instant.` };
+        }
+        return body as SuiviData;
+      })
       .then((d) => {
-        if (active) setData(d);
+        if (active && d) setData(d);
       })
       .catch(() => {
-        if (active) setData({ db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, byMode: [], monthFcfa: 0, pron: { attempts: 0, average: null, weeks: [], sounds: [] }, error: "Pas de connexion." });
+        if (active) setData({ ...empty, error: "Pas de connexion au serveur de l'app (réseau coupé ou trop lent)." });
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [attempt, router]);
 
   const max = Math.max(10, ...(data?.weeks.map((w) => w.minutes) ?? [0]));
   // Calculé seulement une fois les données chargées (donc côté téléphone).
@@ -48,7 +62,26 @@ export function Suivi() {
         </section>
       ) : (
         <>
-          {data.error && <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{data.error}</p>}
+          {data.error && (
+            <section className="flex flex-col gap-2 rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm">
+              <p className="text-danger">{data.error}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setData(null);
+                    setAttempt((a) => a + 1);
+                  }}
+                  className="h-10 flex-1 rounded-xl bg-accent text-sm font-bold text-accent-contrast"
+                >
+                  Réessayer
+                </button>
+                <Link href="/reglages#diagnostic" className="h-10 flex-1 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
+                  Diagnostic
+                </Link>
+              </div>
+            </section>
+          )}
           <section className="grid grid-cols-3 gap-2">
             <Tile value={String(data.streak)} label={data.streak > 1 ? "jours de suite" : "jour de suite"} />
             <Tile value={String(data.totalMinutes)} label="minutes au total" />
