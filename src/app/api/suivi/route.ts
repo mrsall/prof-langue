@@ -19,6 +19,8 @@ export type SuiviData = {
   levels: { en: string | null; fr: string | null };
   byMode: { personality: string; minutes: number }[];
   monthFcfa: number;
+  /** V4 : prononciation (vide tant qu'aucune phrase n'a été notée). */
+  pron: { attempts: number; average: number | null; weeks: { start: string; score: number }[]; sounds: { language: string; phoneme: string; score: number; attempts: number }[] };
 };
 
 export async function GET() {
@@ -34,11 +36,12 @@ export async function GET() {
     levels: { en: null, fr: null },
     byMode: [],
     monthFcfa: 0,
+    pron: { attempts: 0, average: null, weeks: [], sounds: [] },
   };
   if (!empty.db) return Response.json(empty);
   try {
     const sql = (await db())!;
-    const [weeks, days, totals, words, due, byMode, month, en, fr] = await Promise.all([
+    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds] = await Promise.all([
       sql<{ start: string; seconds: number }[]>`select to_char(date_trunc('week', started_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
@@ -52,6 +55,13 @@ export async function GET() {
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
       getLevel("en"),
       getLevel("fr"),
+      sql<{ start: string; score: number }[]>`select to_char(date_trunc('week', created_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
+        avg(pron_score)::int as score from pron_attempts
+        where created_at > now() - interval '8 weeks' group by 1 order by 1`,
+      sql<{ n: number; avg: number | null }[]>`select count(*)::int as n, avg(pron_score)::int as avg from pron_attempts
+        where created_at > now() - interval '30 days'`,
+      sql<{ language: string; phoneme: string; attempts: number; score: number }[]>`select language, phoneme, attempts,
+        (score_sum / greatest(attempts, 1))::int as score from pron_sounds where attempts >= 3 order by 4 asc limit 6`,
     ]);
     return Response.json({
       ...empty,
@@ -64,6 +74,12 @@ export async function GET() {
       levels: { en: en?.level ?? null, fr: fr?.level ?? null },
       byMode: byMode.map((m) => ({ personality: m.personality, minutes: Math.round(m.seconds / 60) })),
       monthFcfa: Math.round(month[0]?.fcfa ?? 0),
+      pron: {
+        attempts: pronTotals[0]?.n ?? 0,
+        average: pronTotals[0]?.avg ?? null,
+        weeks: pronWeeks,
+        sounds: pronSounds,
+      },
     } satisfies SuiviData);
   } catch (error) {
     return Response.json({ ...empty, error: dbErrorMessage(error) }, { status: 502 });

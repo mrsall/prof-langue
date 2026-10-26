@@ -3,6 +3,7 @@ import { connection } from "next/server";
 export const maxDuration = 30;
 import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
+import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
 
 /**
  * Réglages et état général pour l'accueil et la page Réglages.
@@ -21,6 +22,8 @@ export type ReglagesState = {
   pinEnabled: boolean;
   /** Série de jours calculée sur la base (null sans base). */
   streak: number | null;
+  /** V4 : évaluation de la prononciation (Azure Speech). */
+  pronunciation: { configured: boolean; region: string | null; locales: { en: string; fr: string } };
 };
 
 export async function GET() {
@@ -37,6 +40,7 @@ export async function GET() {
     dueWords: 0,
     pinEnabled: Boolean(process.env.APP_PIN),
     streak: null,
+    pronunciation: { configured: pronunciationAvailable(), region: process.env.AZURE_SPEECH_REGION?.trim().toLowerCase() || null, locales: { en: localeFor("en"), fr: localeFor("fr") } },
   };
   if (!state.db) return Response.json(state);
   try {

@@ -183,6 +183,32 @@ export function SettingsV3() {
         </p>
       </section>
 
+      <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Prononciation (Azure Speech)</h2>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.pronunciation.configured ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>
+            {state.pronunciation.configured ? "Prête" : "À configurer"}
+          </span>
+        </div>
+        {state.pronunciation.configured ? (
+          <p className="text-sm text-muted">
+            Région {state.pronunciation.region} · anglais {state.pronunciation.locales.en} · français {state.pronunciation.locales.fr}. Les notes se trouvent dans{" "}
+            <Link href="/prononciation" className="underline">Prononciation</Link> et dans le suivi. Seuls le texte et les notes sont gardés, jamais l&apos;audio.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2 text-sm text-muted">
+            <p>Pour noter ta prononciation mot par mot (5 heures gratuites par mois, puis environ 1 $ l&apos;heure) :</p>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>Va sur portal.azure.com, crée un compte gratuit si besoin.</li>
+              <li>« Créer une ressource » → cherche <strong>Speech</strong> (Azure AI services) → Créer.</li>
+              <li>Région : <strong>France Central</strong> (ou West Europe). Niveau tarifaire : <strong>Free F0</strong>.</li>
+              <li>Une fois créée, ouvre « Clés et point de terminaison » : copie <strong>KEY 1</strong> et la <strong>Région</strong> (ex. francecentral).</li>
+              <li>Dans Vercel → Settings → Environment Variables : ajoute <code className="font-mono">AZURE_SPEECH_KEY</code> et <code className="font-mono">AZURE_SPEECH_REGION</code>, puis Redeploy.</li>
+            </ol>
+          </div>
+        )}
+      </section>
+
       {state.db && (
         <>
           <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">

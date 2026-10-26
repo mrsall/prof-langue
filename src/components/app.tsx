@@ -16,6 +16,7 @@ import {
 import { SPEEDS, SPEED_ORDER, SPEED_RESUME_MESSAGES, isSpeedKey, type SpeedKey } from "@/config/speeds";
 import { CORRECTION_LEVELS, CORRECTION_ORDER, isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
 import { randomTopic } from "@/config/topics";
+import { usableForShadowing } from "@/config/shadowing";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
 import { useHistory } from "@/lib/history";
@@ -1176,6 +1177,9 @@ function HomeScreen({
         <Link href="/carnet" className="underline">
           Carnet{dueWords > 0 ? ` (${dueWords})` : ""}
         </Link>
+        <Link href="/prononciation" className="underline">
+          Prononciation
+        </Link>
         <Link href="/suivi" className="underline">
           Suivi{level ? ` · ${level}` : ""}
         </Link>
@@ -1369,6 +1373,12 @@ function BilanScreen({
         : "Belle discussion, Cherif ! On remet ça demain ?";
   const encouragement = bilan?.encouragement ?? fallbackEncouragement;
   const showTeacher = Boolean(bilan?.suggestTeacher && bilan.teacherFocus && personality.id !== "prof");
+  // Phrases pour le shadowing : d'abord ses phrases corrigées, sinon des phrases du personnage.
+  const shadowingPhrases = (() => {
+    const own = (bilan?.corrections ?? []).map((c) => usableForShadowing(c.corrected)).filter((t): t is string => t !== null);
+    const theirs = transcript.filter((l) => l.role === "agent").map((l) => usableForShadowing(l.text)).filter((t): t is string => t !== null);
+    return [...new Set([...own, ...theirs])].slice(0, 5);
+  })();
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -1576,6 +1586,28 @@ function BilanScreen({
             </section>
           )}
         </>
+      )}
+
+      {kind === "conversation" && !tooShort && shadowingPhrases.length > 0 && (
+        <Link
+          href="/prononciation?from=seance"
+          onClick={() => {
+            try {
+              sessionStorage.setItem("prof-langue:shadowing", JSON.stringify({ language, phrases: shadowingPhrases }));
+            } catch {
+              // stockage indisponible : la page prendra ses propres phrases
+            }
+          }}
+          className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-elevated px-4 py-3"
+        >
+          <span className="flex flex-col">
+            <span className="text-sm font-semibold">Répéter {shadowingPhrases.length} phrase{shadowingPhrases.length > 1 ? "s" : ""} de la séance</span>
+            <span className="text-xs text-muted">Prononciation notée mot par mot</span>
+          </span>
+          <span className="text-muted" aria-hidden>
+            ›
+          </span>
+        </Link>
       )}
 
       <div className="flex flex-col gap-2">

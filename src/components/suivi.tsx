@@ -19,7 +19,7 @@ export function Suivi() {
         if (active) setData(d);
       })
       .catch(() => {
-        if (active) setData({ db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, byMode: [], monthFcfa: 0, error: "Pas de connexion." });
+        if (active) setData({ db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, byMode: [], monthFcfa: 0, pron: { attempts: 0, average: null, weeks: [], sounds: [] }, error: "Pas de connexion." });
       });
     return () => {
       active = false;
@@ -29,6 +29,7 @@ export function Suivi() {
   const max = Math.max(10, ...(data?.weeks.map((w) => w.minutes) ?? [0]));
   // Calculé seulement une fois les données chargées (donc côté téléphone).
   const weeks = data ? fillWeeks(data.weeks) : [];
+  const pronWeeks = data ? fillWeeks(data.pron.weeks.map((w) => ({ start: w.start, minutes: w.score }))) : [];
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -106,13 +107,55 @@ export function Suivi() {
             </section>
           )}
 
-          <p className="text-center text-xs text-muted">
-            Coût estimé ce mois-ci : ≈ {data.monthFcfa} FCFA. Les notes de prononciation arrivent en V4.
-          </p>
+          <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Prononciation</h2>
+              <Link href="/prononciation" className="text-xs text-accent underline">
+                S&apos;entraîner
+              </Link>
+            </div>
+            {data.pron.attempts === 0 ? (
+              <p className="text-sm text-muted">Pas encore de phrase notée. Lance une série de répétition : la voix dit une phrase, tu la répètes, chaque mot est noté.</p>
+            ) : (
+              <>
+                <p className="text-sm">
+                  Moyenne sur 30 jours : <strong className={toneClass(data.pron.average)}>{data.pron.average ?? "–"}</strong> / 100, sur {data.pron.attempts} phrase{data.pron.attempts > 1 ? "s" : ""}.
+                </p>
+                <ul className="flex h-28 items-end gap-2" aria-label="Note moyenne de prononciation par semaine">
+                  {pronWeeks.map((w) => (
+                    <li key={w.start} className="flex h-full flex-1 flex-col items-center justify-end gap-1" aria-label={`Semaine du ${w.label} : ${w.minutes || "pas de note"}`}>
+                      <span className="text-[10px] text-muted">{w.minutes > 0 ? w.minutes : ""}</span>
+                      <span className={`w-full rounded-t-md ${w.minutes >= 80 ? "bg-speaking" : w.minutes >= 60 ? "bg-listening" : w.minutes > 0 ? "bg-danger" : "bg-accent-soft"}`} style={{ height: `${Math.max(3, Math.round((w.minutes / 100) * 80))}px` }} aria-hidden />
+                      <span className="text-[10px] text-muted">{w.label}</span>
+                    </li>
+                  ))}
+                </ul>
+                {data.pron.sounds.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs text-muted">Sons les moins réussis</span>
+                    <ul className="flex flex-wrap gap-2">
+                      {data.pron.sounds.map((s) => (
+                        <li key={`${s.language}-${s.phoneme}`} className={`rounded-full border px-2.5 py-1 font-mono text-xs ${s.score >= 80 ? "border-speaking/40 text-speaking" : s.score >= 60 ? "border-listening/40 text-listening" : "border-danger/40 text-danger"}`}>
+                          {s.language.toUpperCase()} /{s.phoneme}/ {s.score}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+          <p className="text-center text-xs text-muted">Coût estimé ce mois-ci : ≈ {data.monthFcfa} FCFA.</p>
         </>
       )}
     </main>
   );
+}
+
+function toneClass(score: number | null) {
+  if (score === null) return "";
+  return score >= 80 ? "text-speaking" : score >= 60 ? "text-listening" : "text-danger";
 }
 
 function Tile({ value, label }: { value: string; label: string }) {
