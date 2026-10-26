@@ -29,9 +29,18 @@ Tu l'as dit toi-même : tu sais ce que tu penses, mais tu n'arrives pas à le fo
 - Le niveau mesuré par le test sert à régler la difficulté « un cran au-dessus » du tien.
 - Les mots de ton carnet sont glissés naturellement dans les discussions, en plus des révisions.
 
+## Prononciation : le shadowing (V4)
+
+Le *shadowing* (écouter une phrase et la redire aussitôt, en imitant le rythme et la mélodie) est la méthode la plus simple pour améliorer la prononciation à l'oral, parce qu'elle travaille les sons dans de vraies phrases et pas isolément. L'app l'applique ainsi :
+
+- **Une phrase, une répétition, une note par mot.** La voix lit la phrase (normalement ou lentement), tu la répètes, et un service d'évaluation compare ta voix à la prononciation attendue : chaque mot est vert, orange ou rouge, et les sons les moins réussis sont listés. Un mot raté se rejoue lentement d'un appui.
+- **Des phrases qui te servent.** D'abord tes propres phrases corrigées des dernières séances (tu les rediras en conversation), puis des phrases où tu as déjà raté des mots, puis une réserve adaptée à ton niveau. Depuis le bilan, « Répéter N phrases de la séance » enchaîne directement.
+- **Un suivi des sons.** Les sons sont comptés par langue au fil des séries ; le suivi montre ta moyenne sur 30 jours et les sons les moins réussis, pour que tu voies ce qui progresse.
+- **En français, l'objectif est d'être compris, pas d'effacer l'accent.** Une note orange sur un mot qu'on comprend bien n'est pas un problème ; vise le vert sur les mots que tu dois souvent répéter.
+
 ## Ce que l'app ne peut pas faire (encore)
 
-- Juger ta prononciation : les personnages ne reçoivent que du texte. C'est la V4 (évaluation mot par mot, shadowing).
+- Les personnages ne jugent toujours pas ta prononciation (ils ne reçoivent que du texte). C'est l'écran **Prononciation** qui s'en charge, avec un service spécialisé (Azure Speech) : voir ci-dessous.
 - Remplacer de vraies conversations avec des humains : une étude de 2026 montre que le dialogue avec une IA ressemble plus à un « monologue accompagné » qu'à un vrai échange rapide. L'app est un entraînement quotidien, pas un substitut.
 
 ## Sources

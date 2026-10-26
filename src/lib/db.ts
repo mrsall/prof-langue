@@ -145,6 +145,27 @@ const SCHEMA_STATEMENTS = [
   tip text,
   created_at timestamptz not null default now()
 )`,
+  `create table if not exists pron_attempts (
+  id bigserial primary key,
+  created_at timestamptz not null default now(),
+  language text not null,
+  reference text not null,
+  recognized text,
+  pron_score integer not null default 0,
+  accuracy integer not null default 0,
+  fluency integer not null default 0,
+  completeness integer not null default 0,
+  words jsonb
+)`,
+  `create table if not exists pron_sounds (
+  language text not null,
+  phoneme text not null,
+  attempts integer not null default 0,
+  fails integer not null default 0,
+  score_sum integer not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (language, phoneme)
+)`,
 ];
 
 /**
