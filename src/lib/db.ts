@@ -77,7 +77,7 @@ export async function db(): Promise<Sql | null> {
   }
   const sql = globalForDb.__profLangueSql;
   if (!globalForDb.__profLangueSchema) {
-    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql), 15000).catch((error) => {
+    globalForDb.__profLangueSchema = withTimeout(ensureSchema(sql, url), 15000).catch((error) => {
       globalForDb.__profLangueSchema = undefined;
       globalForDb.__profLangueFailure = { at: Date.now(), error };
       throw error;
@@ -93,13 +93,19 @@ export function resetDbBreaker() {
   globalForDb.__profLangueFailure = undefined;
 }
 
-const SCHEMA_SQL = `
-create table if not exists settings (
+/**
+ * Une commande par élément du schéma. Elles sont envoyées une par une : le
+ * pooler Supabase en mode transaction gère mal plusieurs commandes dans un
+ * même message, et laissait ensuite la connexion bloquée (toutes les requêtes
+ * suivantes attendaient sans fin, d'où « Serveur injoignable »).
+ */
+const SCHEMA_STATEMENTS = [
+  `create table if not exists settings (
   key text primary key,
   value jsonb not null,
   updated_at timestamptz not null default now()
-);
-create table if not exists sessions (
+)`,
+  `create table if not exists sessions (
   id bigserial primary key,
   started_at timestamptz not null default now(),
   kind text not null default 'conversation',
@@ -116,8 +122,8 @@ create table if not exists sessions (
   encouragement text,
   level text,
   cost_fcfa numeric not null default 0
-);
-create table if not exists words (
+)`,
+  `create table if not exists words (
   id bigserial primary key,
   language text not null,
   word text not null,
@@ -128,9 +134,9 @@ create table if not exists words (
   stage integer not null default 0,
   reviews integer not null default 0,
   lapses integer not null default 0
-);
-create unique index if not exists words_language_word_idx on words (language, lower(word));
-create table if not exists errors (
+)`,
+  `create unique index if not exists words_language_word_idx on words (language, lower(word))`,
+  `create table if not exists errors (
   id bigserial primary key,
   session_id bigint,
   language text not null,
@@ -138,8 +144,8 @@ create table if not exists errors (
   "right" text not null,
   tip text,
   created_at timestamptz not null default now()
-);
-create table if not exists pron_attempts (
+)`,
+  `create table if not exists pron_attempts (
   id bigserial primary key,
   created_at timestamptz not null default now(),
   language text not null,
@@ -150,8 +156,8 @@ create table if not exists pron_attempts (
   fluency integer not null default 0,
   completeness integer not null default 0,
   words jsonb
-);
-create table if not exists pron_sounds (
+)`,
+  `create table if not exists pron_sounds (
   language text not null,
   phoneme text not null,
   attempts integer not null default 0,
@@ -159,12 +165,39 @@ create table if not exists pron_sounds (
   score_sum integer not null default 0,
   updated_at timestamptz not null default now(),
   primary key (language, phoneme)
-);
-`;
+)`,
+];
 
-/** Crée les tables en un seul aller-retour (important quand la base est loin). */
-async function ensureSchema(sql: Sql) {
-  await sql.unsafe(SCHEMA_SQL);
+/**
+ * Vérifie le schéma sans jamais risquer de bloquer la connexion de l'app :
+ * 1. une seule requête simple dit si tout existe déjà (cas normal : rien à faire) ;
+ * 2. sinon, les commandes passent une par une sur une connexion jetable,
+ *    fermée juste après, et la connexion principale reste intacte.
+ */
+async function ensureSchema(sql: Sql, url: string) {
+  const [row] = await sql<{ ok: boolean }[]>`select
+    to_regclass('public.settings') is not null
+    and to_regclass('public.sessions') is not null
+    and to_regclass('public.words') is not null
+    and to_regclass('public.words_language_word_idx') is not null
+    and to_regclass('public.errors') is not null as ok`;
+  if (row?.ok) return;
+
+  const setup = postgres(url, {
+    ssl: url.includes("localhost") ? undefined : "require",
+    max: 1,
+    prepare: false,
+    idle_timeout: 2,
+    connect_timeout: 8,
+    onnotice: () => undefined, // « existe déjà » n'est pas une erreur
+  });
+  try {
+    for (const statement of SCHEMA_STATEMENTS) {
+      await setup.unsafe(statement);
+    }
+  } finally {
+    await setup.end({ timeout: 2 }).catch(() => undefined);
+  }
 }
 
 export async function getSetting<T>(key: string, fallback: T): Promise<T> {
