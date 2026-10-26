@@ -166,6 +166,7 @@ const SCHEMA_STATEMENTS = [
   updated_at timestamptz not null default now(),
   primary key (language, phoneme)
 )`,
+  `alter table sessions add column if not exists engine text not null default 'elevenlabs'`,
 ];
 
 /**
@@ -180,7 +181,10 @@ async function ensureSchema(sql: Sql, url: string) {
     and to_regclass('public.sessions') is not null
     and to_regclass('public.words') is not null
     and to_regclass('public.words_language_word_idx') is not null
-    and to_regclass('public.errors') is not null as ok`;
+    and to_regclass('public.errors') is not null
+    and to_regclass('public.pron_attempts') is not null
+    and to_regclass('public.pron_sounds') is not null
+    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'engine') as ok`;
   if (row?.ok) return;
 
   const setup = postgres(url, {

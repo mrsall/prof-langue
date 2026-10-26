@@ -13,7 +13,8 @@ import {
   type Language,
   type Personality,
 } from "@/config/personalities";
-import { SPEEDS, SPEED_ORDER, SPEED_RESUME_MESSAGES, isSpeedKey, type SpeedKey } from "@/config/speeds";
+import { SPEEDS, SPEED_ORDER, SPEED_RESUME_MESSAGES, isSpeedKey, speedValue, type SpeedKey } from "@/config/speeds";
+import { EcoEngine, type EcoMode } from "@/lib/eco-engine";
 import { CORRECTION_LEVELS, CORRECTION_ORDER, isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
 import { randomTopic } from "@/config/topics";
 import { usableForShadowing } from "@/config/shadowing";
@@ -36,6 +37,8 @@ type Phase = "home" | "topic" | "live" | "bilan";
 type TranscriptLine = { id: number; role: "user" | "agent"; text: string };
 type ConnectionType = "webrtc" | "websocket";
 type TalkMode = "mains-libres" | "appui";
+/** Qui fait la voix : ElevenLabs (naturelle, minutes payantes) ou le téléphone (éco, gratuit). */
+type Engine = "elevenlabs" | "eco";
 type TopicChoice = { title: string | null; own: boolean };
 
 type SessionParams = {
@@ -48,6 +51,7 @@ type SessionParams = {
   reviewWords?: ReviewWord[];
   /** Revanche d'un débat : même motion, mêmes camps, remarques du juge à vérifier. */
   rematch?: Rematch | null;
+  engine?: Engine;
 };
 
 const TEST_MAX_SECONDS = 330;
@@ -59,6 +63,7 @@ const SHOW_TEXT_KEY = "prof-langue:show-text";
 const TALK_MODE_KEY = "prof-langue:talk-mode";
 const LANGUAGE_KEY = "prof-langue:language";
 const MODE_KEY = "prof-langue:mode";
+const ENGINE_KEY = "prof-langue:engine";
 
 const REPEAT_COMMAND: Record<Language, string> = {
   en: "Please say your last sentence again, a little slower.",
@@ -94,6 +99,8 @@ function AppInner() {
   const [savedTalkMode, setSavedTalkMode] = useLocalStorage(TALK_MODE_KEY);
   const talkMode: TalkMode = savedTalkMode === "appui" ? "appui" : "mains-libres";
   const handsFree = talkMode === "mains-libres";
+  const [savedEngine, setSavedEngine] = useLocalStorage(ENGINE_KEY);
+  const engine: Engine = savedEngine === "eco" ? "eco" : "elevenlabs";
   const [savedLanguage, setSavedLanguage] = useLocalStorage(LANGUAGE_KEY);
   const language: Language = isLanguage(savedLanguage) ? savedLanguage : "en";
   const [savedMode, setSavedMode] = useLocalStorage(MODE_KEY);
@@ -151,6 +158,11 @@ function AppInner() {
   const startRef = useRef<(opts: StartOptions) => Promise<boolean>>(async () => false);
   const finishRef = useRef<() => void>(() => {});
   const autoFinishTimer = useRef<number | null>(null);
+  // Mode éco : moteur côté téléphone, à la place de la conversation ElevenLabs.
+  const ecoRef = useRef<EcoEngine | null>(null);
+  const [ecoStatus, setEcoStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
+  const [ecoMode, setEcoMode] = useState<EcoMode>("idle");
+  const [interim, setInterim] = useState("");
 
   type StartOptions = {
     params?: Partial<SessionParams>;
@@ -255,7 +267,19 @@ function AppInner() {
     },
   });
 
-  const { status, isSpeaking, startSession, endSession, sendUserMessage } = conversation;
+  const { status: elStatus, isSpeaking: elSpeaking, startSession, endSession: endElSession, sendUserMessage } = conversation;
+  const isEco = (live?.engine ?? engine) === "eco";
+  const status = isEco ? ecoStatus : elStatus;
+  const isSpeaking = isEco ? ecoMode === "speaking" : elSpeaking;
+  const endSession = useCallback(() => {
+    const eco = ecoRef.current;
+    if (eco) {
+      ecoRef.current = null;
+      eco.end();
+    } else {
+      endElSession();
+    }
+  }, [endElSession]);
   const connected = status === "connected";
   const busy = preparing || status === "connecting";
 
@@ -271,8 +295,12 @@ function AppInner() {
     return () => clearInterval(id);
   }, [phase, connected]);
 
-  // Plafond du jour (dérivé, pas d'état).
-  const capReached = Boolean(remote?.db) && remote != null && phase === "live" && remote.todayMinutes * 60 + elapsed >= remote.cost.dailyCapMinutes * 60;
+  useEffect(() => {
+    ecoRef.current?.setHandsFree(handsFree);
+  }, [handsFree]);
+
+  // Plafond du jour (dérivé, pas d'état). Le mode éco ne consomme pas de minutes.
+  const capReached = !isEco && Boolean(remote?.db) && remote != null && phase === "live" && remote.todayMinutes * 60 + elapsed >= remote.cost.dailyCapMinutes * 60;
 
   // L'avatar respire au rythme de la voix.
   useEffect(() => {
@@ -280,7 +308,7 @@ function AppInner() {
     if (!connected || !orb) return;
     let frame = 0;
     const tick = () => {
-      const level = isSpeaking ? conversation.getOutputVolume() : conversation.getInputVolume();
+      const level = ecoRef.current ? ecoRef.current.getLevel() : isSpeaking ? conversation.getOutputVolume() : conversation.getInputVolume();
       orb.style.transform = `scale(${(1 + Math.min(level, 1) * 0.12).toFixed(3)})`;
       frame = requestAnimationFrame(tick);
     };
@@ -343,7 +371,7 @@ function AppInner() {
   const start = useCallback(
     async ({ params, context, force }: StartOptions) => {
       const base: SessionParams = liveRef.current ?? { personality, language, correction, speed, topic: { title: null, own: true }, kind: "conversation" };
-      const p: SessionParams = { ...base, ...params };
+      const p: SessionParams = { ...base, ...params, engine: params?.engine ?? base.engine ?? engine };
       liveRef.current = p;
       setLive(p);
       setError(null);
@@ -359,6 +387,92 @@ function AppInner() {
         } catch {
           setError("Le micro est refusé. Autorise le micro pour ce site dans les réglages du navigateur, puis réessaie.");
           return false;
+        }
+        if (p.engine === "eco") {
+          restarting.current = Boolean(context);
+          ending.current = false;
+          setEcoStatus("connecting");
+          const past = context ? transcriptRef.current.map((l) => ({ role: l.role, text: l.text })) : [];
+          const eng = new EcoEngine({
+            body: {
+              personality: p.personality.id,
+              language: p.language,
+              correction: p.correction,
+              topic: p.topic.title,
+              ownTopic: p.topic.own,
+              memory: history.memoryFor(p.personality.id, p.personality.modeLabel),
+              kind: p.kind,
+              reviewWords: p.reviewWords,
+              rematch: p.rematch ?? null,
+              context: context ? { transcript: past } : undefined,
+            },
+            language: p.language,
+            rate: speedValue(p.speed),
+            handsFree,
+            history: past,
+            firstMessage: context?.resumeMessage ?? null,
+            callbacks: {
+              onConnect: () => {
+                everConnected.current = true;
+                setEcoStatus("connected");
+                setMuted(false);
+                setError(null);
+                setNotice(null);
+                if (!restarting.current) {
+                  connectAt.current = performance.now();
+                  userTalkMs.current = 0;
+                  agentTalkMs.current = 0;
+                  userTurns.current = 0;
+                  setElapsed(0);
+                  setTranscript([]);
+                  transcriptRef.current = [];
+                }
+                restarting.current = false;
+                navigator.vibrate?.(30);
+              },
+              onDisconnect: (details) => {
+                setEcoStatus("disconnected");
+                setEcoMode("idle");
+                setInterim("");
+                setHolding(false);
+                if (agentSpeakStart.current != null) {
+                  agentTalkMs.current += performance.now() - agentSpeakStart.current;
+                  agentSpeakStart.current = null;
+                }
+                if (ending.current || restarting.current) return;
+                if (details.reason === "error") setError(details.message ?? "La discussion s'est coupée.");
+              },
+              onError: (message) => setError(message),
+              onMessage: ({ role, message }) => {
+                if (role === "user") userTurns.current += 1;
+                pushLine(role, message);
+                if (role === "agent" && liveRef.current?.kind === "test" && /test (is|est) (finished|over|termin)|test is done|fin du test/i.test(message)) {
+                  if (autoFinishTimer.current) window.clearTimeout(autoFinishTimer.current);
+                  autoFinishTimer.current = window.setTimeout(() => finishRef.current(), 6000);
+                }
+              },
+              onModeChange: ({ mode }) => {
+                setEcoMode(mode);
+                if (mode !== "listening") setInterim("");
+                const now = performance.now();
+                if (mode === "speaking") {
+                  agentSpeakStart.current = now;
+                } else if (agentSpeakStart.current != null) {
+                  agentTalkMs.current += now - agentSpeakStart.current;
+                  agentSpeakStart.current = null;
+                }
+              },
+              onInterim: (text) => setInterim(text),
+            },
+          });
+          ecoRef.current = eng;
+          const ok = await eng.start();
+          if (!ok) {
+            setEcoStatus("disconnected");
+            if (ecoRef.current === eng) ecoRef.current = null;
+            return false;
+          }
+          return true;
         }
         if (!(await ensureAgentConfigured())) return false;
         if (p.language === "fr") await ensureFrenchVoices();
@@ -415,7 +529,7 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history],
+    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine],
   );
 
   useEffect(() => {
@@ -439,13 +553,13 @@ function AppInner() {
   /** Lance une séance, après un avertissement si le plafond du jour est atteint. */
   const begin = useCallback(
     (params: Partial<SessionParams>) => {
-      if (remote && remote.db && remote.todayMinutes >= remote.cost.dailyCapMinutes) {
+      if (remote && remote.db && (params.engine ?? engine) !== "eco" && remote.todayMinutes >= remote.cost.dailyCapMinutes) {
         setCapPrompt(params);
         return;
       }
       launch(params);
     },
-    [remote, launch],
+    [remote, launch, engine],
   );
 
   // Révision à la voix lancée depuis le carnet (/?start=revision).
@@ -493,6 +607,7 @@ function AppInner() {
     (next: boolean) => {
       if (!connected && next) return;
       setHolding(next);
+      ecoRef.current?.pushToTalk(next);
       navigator.vibrate?.(next ? 30 : 20);
     },
     [connected],
@@ -500,6 +615,10 @@ function AppInner() {
 
   const repeat = useCallback(() => {
     if (!connected || !live) return;
+    if (ecoRef.current) {
+      ecoRef.current.repeatLast();
+      return;
+    }
     pendingCommand.current = REPEAT_COMMAND[live.language];
     sendUserMessage(REPEAT_COMMAND[live.language]);
   }, [connected, live, sendUserMessage]);
@@ -607,6 +726,7 @@ function AppInner() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             kind: p.kind,
+            engine: p.engine ?? "elevenlabs",
             language: p.language,
             personality: p.personality.id,
             topic: p.topic.title,
@@ -665,6 +785,8 @@ function AppInner() {
         onSpeedChange={setSavedSpeed}
         talkMode={talkMode}
         onTalkModeChange={setSavedTalkMode}
+        engine={engine}
+        onEngineChange={setSavedEngine}
         streak={remote?.db && remote.streak != null ? Math.max(remote.streak, progress.streak) : progress.streak}
         minutesToday={remote?.db ? Math.max(remote.todayMinutes, progress.minutesToday) : progress.minutesToday}
         goalMinutes={progress.goalMinutes}
@@ -741,7 +863,11 @@ function AppInner() {
             ? "Je t'écoute…"
             : isSpeaking
               ? `${displayName} parle…`
-              : handsFree
+              : isEco && ecoMode === "thinking"
+                ? `${displayName} réfléchit…`
+                : isEco && interim
+                  ? `« ${interim} »`
+                  : handsFree
                 ? muted
                   ? "Micro coupé"
                   : "Je t'écoute, parle quand tu veux"
@@ -760,6 +886,7 @@ function AppInner() {
             <span className="text-xs text-muted">
               {p.kind === "test" ? "Test de niveau" : p.kind === "revision" ? "Révision de vocabulaire" : p.personality.modeLabel} · {LANGUAGE_LABELS[p.language].toLowerCase()}
               {p.topic.title ? ` · ${p.topic.title}` : ""}
+              {isEco ? " · mode éco" : ""}
             </span>
           </div>
         </div>
@@ -794,7 +921,9 @@ function AppInner() {
           <p className="max-w-xs text-sm text-muted">
             {handsFree
               ? isSpeaking
-                ? "Parle par-dessus pour l'interrompre."
+                ? isEco
+                  ? "Appuie sur le micro pour l'interrompre."
+                  : "Parle par-dessus pour l'interrompre."
                 : muted
                   ? "Appuie sur le micro pour le rouvrir."
                   : `${displayName} détecte la fin de ta phrase tout seul.`
@@ -884,6 +1013,13 @@ function AppInner() {
           disabled={!connected}
           speaking={isSpeaking}
           onToggle={() => {
+            const eco = ecoRef.current;
+            if (eco?.isSpeaking) {
+              eco.interrupt();
+              navigator.vibrate?.(20);
+              return;
+            }
+            eco?.setMuted(!muted);
             setMuted((m) => !m);
             navigator.vibrate?.(20);
           }}
@@ -978,6 +1114,8 @@ function HomeScreen({
   onSpeedChange,
   talkMode,
   onTalkModeChange,
+  engine,
+  onEngineChange,
   streak,
   minutesToday,
   goalMinutes,
@@ -996,6 +1134,8 @@ function HomeScreen({
   onSpeedChange: (s: SpeedKey) => void;
   talkMode: TalkMode;
   onTalkModeChange: (m: TalkMode) => void;
+  engine: Engine;
+  onEngineChange: (e: Engine) => void;
   streak: number;
   minutesToday: number;
   goalMinutes: number;
@@ -1123,6 +1263,7 @@ function HomeScreen({
           Micro et vitesse{" "}
           <span className="font-normal text-muted">
             · {talkMode === "mains-libres" ? "mains libres" : "appui pour parler"} · {SPEEDS.find((s) => s.key === speed)?.label.toLowerCase()}
+            {engine === "eco" ? " · éco" : ""}
           </span>
         </summary>
         <div className="mt-3 flex flex-col gap-3">
@@ -1144,6 +1285,32 @@ function HomeScreen({
                 {m.label}
               </button>
             ))}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Qui fait la voix">
+              {(
+                [
+                  { key: "elevenlabs", label: "Voix naturelle" },
+                  { key: "eco", label: "Mode éco (gratuit)" },
+                ] as { key: Engine; label: string }[]
+              ).map((e) => (
+                <button
+                  key={e.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={engine === e.key}
+                  onClick={() => onEngineChange(e.key)}
+                  className={`h-10 rounded-lg text-sm font-medium ${engine === e.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                >
+                  {e.label}
+                </button>
+              ))}
+            </div>
+            <p className="px-1 text-xs text-muted">
+              {engine === "eco"
+                ? "Oreille et voix du téléphone, cerveau Claude : zéro minute ElevenLabs. Voix moins naturelle ; pour l'interrompre, appuie sur le micro."
+                : "ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes."}
+            </p>
           </div>
           <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Vitesse de la voix">
             {SPEEDS.map((s) => (

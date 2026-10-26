@@ -3,23 +3,31 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { PhrasesResponse, ShadowPhrase, SoundStat } from "@/app/api/prononciation/phrases/route";
-import type { PronunciationResult, WordScore } from "@/lib/pronunciation";
+import type { PronunciationResponse, PronunciationStatus } from "@/app/api/prononciation/route";
+import type { WordScore } from "@/lib/pronunciation";
 import { startWavRecorder, type WavRecorder } from "@/lib/recorder";
+import { LOCALES, recognizeOnce, speakText, speechRecognitionAvailable, speechSynthesisAvailable, type RecognizeHandle, type SpeakHandle } from "@/lib/speech";
 import { scoreTone, type ScoreTone } from "@/config/shadowing";
 import { LANGUAGE_LABELS, isLanguage, type Language } from "@/config/personalities";
+import { useLocalStorage } from "@/lib/use-local-storage";
 
 /**
  * V4 — Shadowing : une phrase est lue par la voix, Cherif la répète, chaque mot
  * est coloré (vert / orange / rouge) et un mot raté se rejoue lentement d'un appui.
- * Les phrases viennent des dernières séances, des mots ratés, puis d'une réserve.
+ *
+ * Sans rien payer : la reconnaissance vocale du téléphone écoute, le serveur
+ * compare mot à mot et Claude explique le son raté. Si Azure Speech est réglé,
+ * on a en plus une note son par son.
  */
 
 const MAX_RECORD_SECONDS = 15;
 const HANDOFF_KEY = "prof-langue:shadowing";
 const LANGUAGE_KEY = "prof-langue:language";
+const TTS_KEY = "prof-langue:tts-voice";
 
 type Status = "idle" | "playing" | "recording" | "scoring";
-type Done = { phrase: ShadowPhrase; result: PronunciationResult };
+type Capture = "azure" | "phone" | "scribe" | "none";
+type Done = { phrase: ShadowPhrase; result: PronunciationResponse };
 
 const TONE_CLASS: Record<ScoreTone, string> = {
   good: "bg-speaking/15 text-speaking border-speaking/40",
@@ -29,17 +37,23 @@ const TONE_CLASS: Record<ScoreTone, string> = {
 
 export function Shadowing() {
   const [language, setLanguage] = useState<Language | null>(null);
+  const [status, setStatus] = useState<PronunciationStatus | null>(null);
   const [setup, setSetup] = useState<PhrasesResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
-  const [status, setStatus] = useState<Status>("idle");
+  const [phase, setPhase] = useState<Status>("idle");
   const [level, setLevel] = useState(0);
-  const [result, setResult] = useState<PronunciationResult | null>(null);
+  const [interim, setInterim] = useState("");
+  const [result, setResult] = useState<PronunciationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<Done[]>([]);
   const [seed, setSeed] = useState(0);
+  const [savedTts, setSavedTts] = useLocalStorage(TTS_KEY);
+  const phoneVoice = savedTts === "phone";
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speakRef = useRef<SpeakHandle | null>(null);
   const recorderRef = useRef<WavRecorder | null>(null);
+  const recognizerRef = useRef<RecognizeHandle | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handoff = useRef<{ language: Language; phrases: string[] } | null>(null);
 
@@ -65,6 +79,22 @@ export function Shadowing() {
     }
     const id = setTimeout(() => setLanguage(lang), 0);
     return () => clearTimeout(id);
+  }, []);
+
+  // État du service (Azure réglé ou non, Scribe disponible).
+  useEffect(() => {
+    let active = true;
+    fetch("/api/prononciation")
+      .then(async (res) => (await res.json()) as PronunciationStatus)
+      .then((s) => {
+        if (active) setStatus(s);
+      })
+      .catch(() => {
+        if (active) setStatus({ available: true, engine: "text", scribe: false, locales: { en: "en-GB", fr: "fr-FR" }, db: false });
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Phrases de la série.
@@ -95,6 +125,8 @@ export function Shadowing() {
   useEffect(
     () => () => {
       recorderRef.current?.cancel();
+      recognizerRef.current?.abort();
+      speakRef.current?.cancel();
       if (stopTimer.current) clearTimeout(stopTimer.current);
       audioRef.current?.pause();
     },
@@ -104,32 +136,127 @@ export function Shadowing() {
   const phrases = setup?.phrases ?? [];
   const current = phrases[index] ?? null;
   const finished = setup !== null && phrases.length > 0 && index >= phrases.length;
+  const capture: Capture = status === null ? "none" : status.engine === "azure" ? "azure" : speechRecognitionAvailable() ? "phone" : status.scribe ? "scribe" : "none";
+  const canSpeakPhone = speechSynthesisAvailable();
+
+  function getAudio() {
+    if (!audioRef.current) audioRef.current = new Audio();
+    return audioRef.current;
+  }
+
+  function stopPlayback() {
+    audioRef.current?.pause();
+    speakRef.current?.cancel();
+    speakRef.current = null;
+  }
+
+  function playWithPhone(text: string, speed: number) {
+    if (!language || !canSpeakPhone) {
+      setError("Pas de voix disponible sur ce téléphone.");
+      return;
+    }
+    setStatusPlaying();
+    const handle = speakText(text, { language, rate: speed });
+    speakRef.current = handle;
+    handle.done.catch(() => undefined).finally(() => {
+      if (speakRef.current === handle) {
+        speakRef.current = null;
+        setPhase((s) => (s === "playing" ? "idle" : s));
+      }
+    });
+  }
+
+  function setStatusPlaying() {
+    setError(null);
+    setPhase("playing");
+  }
 
   function play(text: string, speed: number) {
     if (!language) return;
-    const audio = audioRef.current ?? (audioRef.current = new Audio());
-    audio.pause();
+    stopPlayback();
+    if (phoneVoice) {
+      playWithPhone(text, speed);
+      return;
+    }
+    const audio = getAudio();
     audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}`;
-    audio.onended = () => setStatus((s) => (s === "playing" ? "idle" : s));
+    audio.onended = () => setPhase((s) => (s === "playing" ? "idle" : s));
     audio.onerror = () => {
-      setStatus((s) => (s === "playing" ? "idle" : s));
-      setError("Impossible de lire la voix. Vérifie la connexion.");
+      // La voix naturelle n'a pas pu être chargée : on lit avec la voix du téléphone.
+      if (canSpeakPhone) playWithPhone(text, speed);
+      else {
+        setPhase((s) => (s === "playing" ? "idle" : s));
+        setError("Impossible de lire la voix. Vérifie la connexion.");
+      }
     };
-    setError(null);
-    setStatus("playing");
-    void audio.play().catch(() => setStatus("idle"));
+    setStatusPlaying();
+    void audio.play().catch(() => {
+      if (canSpeakPhone) playWithPhone(text, speed);
+      else setPhase("idle");
+    });
+  }
+
+  async function score(request: () => Promise<Response>) {
+    if (!current) return;
+    setPhase("scoring");
+    try {
+      const res = await request();
+      const data = (await res.json().catch(() => ({}))) as PronunciationResponse & { error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? `Erreur ${res.status}`);
+      setResult(data);
+      setDone((d) => [...d.filter((x) => x.phrase.text !== current.text), { phrase: current, result: data }]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Analyse impossible.");
+    } finally {
+      setPhase("idle");
+      setInterim("");
+    }
   }
 
   async function startRecording() {
-    if (!current) return;
-    audioRef.current?.pause();
+    if (!current || !language) return;
+    stopPlayback();
     setError(null);
     setResult(null);
+    setInterim("");
+    if (capture === "none") {
+      setError("Ce téléphone n'a pas de reconnaissance vocale et aucun service de secours n'est réglé.");
+      return;
+    }
+    if (capture === "phone") {
+      const handle = recognizeOnce({ lang: LOCALES[language], onInterim: setInterim, maxMs: MAX_RECORD_SECONDS * 1000 });
+      recognizerRef.current = handle;
+      navigator.vibrate?.(30);
+      setPhase("recording");
+      const outcome = await handle.done;
+      if (recognizerRef.current !== handle) return;
+      recognizerRef.current = null;
+      navigator.vibrate?.(20);
+      if (outcome.error) {
+        setPhase("idle");
+        setError(outcome.error);
+        return;
+      }
+      if (!outcome.text) {
+        setPhase("idle");
+        setError("Je n'ai rien entendu. Appuie, répète la phrase, puis appuie à nouveau.");
+        return;
+      }
+      const reference = current.text;
+      await score(() =>
+        fetch("/api/prononciation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript: outcome.text, reference, language, durationMs: outcome.durationMs }),
+        }),
+      );
+      return;
+    }
     try {
       const rec = await startWavRecorder(setLevel);
       recorderRef.current = rec;
       navigator.vibrate?.(30);
-      setStatus("recording");
+      setPhase("recording");
       stopTimer.current = setTimeout(() => void stopRecording(), MAX_RECORD_SECONDS * 1000);
     } catch (e) {
       setError(e instanceof Error && /denied|permission|NotAllowed/i.test(e.message + e.name) ? "Autorise le micro pour ce site, puis réessaie." : e instanceof Error ? e.message : "Micro indisponible.");
@@ -137,33 +264,30 @@ export function Shadowing() {
   }
 
   async function stopRecording() {
+    if (recognizerRef.current) {
+      recognizerRef.current.stop();
+      return;
+    }
     const rec = recorderRef.current;
     if (!rec || !current || !language) return;
     recorderRef.current = null;
     if (stopTimer.current) clearTimeout(stopTimer.current);
     navigator.vibrate?.(20);
-    setStatus("scoring");
     setLevel(0);
-    try {
+    const reference = current.text;
+    const lang = language;
+    await score(async () => {
       const blob = await rec.stop();
       const form = new FormData();
       form.append("audio", blob, "repetition.wav");
-      form.append("reference", current.text);
-      form.append("language", language);
-      const res = await fetch("/api/prononciation", { method: "POST", body: form });
-      const data = (await res.json().catch(() => ({}))) as PronunciationResult & { error?: string };
-      if (!res.ok || data.error) throw new Error(data.error ?? `Erreur ${res.status}`);
-      setResult(data);
-      setDone((d) => [...d.filter((x) => x.phrase.text !== current.text), { phrase: current, result: data }]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Analyse impossible.");
-    } finally {
-      setStatus("idle");
-    }
+      form.append("reference", reference);
+      form.append("language", lang);
+      return fetch("/api/prononciation", { method: "POST", body: form });
+    });
   }
 
   function next() {
-    audioRef.current?.pause();
+    stopPlayback();
     setResult(null);
     setError(null);
     setIndex((i) => i + 1);
@@ -178,6 +302,8 @@ export function Shadowing() {
     setError(null);
     setSeed((s) => s + 1);
   }
+
+  const engineLabel = capture === "azure" ? "Azure (son par son)" : capture === "phone" ? "téléphone (gratuit)" : capture === "scribe" ? "Scribe ElevenLabs" : "indisponible";
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -196,7 +322,7 @@ export function Shadowing() {
               type="button"
               role="radio"
               aria-checked={language === l}
-              disabled={status !== "idle"}
+              disabled={phase !== "idle"}
               onClick={() => {
                 if (l === language) return;
                 setLanguage(l);
@@ -218,14 +344,12 @@ export function Shadowing() {
 
       {setup === null && !loadError ? (
         <p className="text-sm text-muted">Je prépare tes phrases…</p>
-      ) : setup && !setup.available ? (
+      ) : status && capture === "none" ? (
         <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4 text-sm">
-          <h2 className="text-base font-semibold">À configurer</h2>
+          <h2 className="text-base font-semibold">Écoute impossible sur ce téléphone</h2>
           <p className="text-muted">
-            L&apos;évaluation de la prononciation utilise Azure Speech (5 heures gratuites par mois). Il manque <code className="font-mono">AZURE_SPEECH_KEY</code> et{" "}
-            <code className="font-mono">AZURE_SPEECH_REGION</code> dans Vercel. La marche à suivre est dans <Link href="/reglages" className="underline">Réglages</Link>.
+            Ce navigateur n&apos;a pas de reconnaissance vocale. Essaie avec Chrome (Android) ou Safari (iPhone, depuis le navigateur plutôt que l&apos;icône installée). Tu peux quand même écouter et répéter les phrases.
           </p>
-          <p className="text-muted">En attendant, tu peux écouter les phrases et les répéter sans note.</p>
         </section>
       ) : null}
 
@@ -257,24 +381,49 @@ export function Shadowing() {
               <p className="text-lg font-semibold leading-snug">{current.text}</p>
             )}
             <div className="flex gap-2">
-              <button type="button" onClick={() => play(current.text, 1)} disabled={status === "recording" || status === "scoring"} className="h-11 flex-1 rounded-xl border border-line bg-bg text-sm font-semibold disabled:opacity-50">
-                {status === "playing" ? "Écoute…" : "Écouter"}
+              <button type="button" onClick={() => play(current.text, 1)} disabled={phase === "recording" || phase === "scoring"} className="h-11 flex-1 rounded-xl border border-line bg-bg text-sm font-semibold disabled:opacity-50">
+                {phase === "playing" ? "Écoute…" : "Écouter"}
               </button>
-              <button type="button" onClick={() => play(current.text, 0.75)} disabled={status === "recording" || status === "scoring"} className="h-11 flex-1 rounded-xl border border-line bg-bg text-sm font-semibold disabled:opacity-50">
+              <button type="button" onClick={() => play(current.text, 0.75)} disabled={phase === "recording" || phase === "scoring"} className="h-11 flex-1 rounded-xl border border-line bg-bg text-sm font-semibold disabled:opacity-50">
                 Lentement
               </button>
             </div>
+            {canSpeakPhone && (
+              <button type="button" onClick={() => setSavedTts(phoneVoice ? "eleven" : "phone")} className="self-center text-xs text-muted underline">
+                Voix : {phoneVoice ? "téléphone (gratuite)" : "naturelle (ElevenLabs)"} · changer
+              </button>
+            )}
           </section>
 
           {result && (
             <section className="grid grid-cols-3 gap-2">
               <ScoreTile label="Prononciation" value={result.scores.pron} />
-              <ScoreTile label="Précision" value={result.scores.accuracy} />
+              <ScoreTile label={result.engine === "azure" ? "Précision" : "Mots compris"} value={result.scores.accuracy} />
               <ScoreTile label="Fluidité" value={result.scores.fluency} />
             </section>
           )}
+          {result && result.engine !== "azure" && result.recognized && (
+            <p className="text-center text-xs text-muted">
+              Compris : « {result.recognized} »
+            </p>
+          )}
+          {result && result.tips.length > 0 && (
+            <section className="flex flex-col gap-2 rounded-2xl border border-accent/30 bg-elevated p-4">
+              <span className="text-sm font-semibold">Comment placer le son</span>
+              {result.tips.map((t) => (
+                <div key={t.word} className="flex flex-col gap-0.5 rounded-xl bg-bg px-3 py-2 text-sm">
+                  <span>
+                    <strong>{t.word}</strong>
+                    {t.heard ? <span className="text-muted"> · entendu « {t.heard} »</span> : <span className="text-muted"> · pas entendu</span>}
+                    <span className="ml-2 rounded-full border border-line px-2 py-0.5 font-mono text-xs">{t.sound}</span>
+                  </span>
+                  <span className="text-muted">{t.tip}</span>
+                </div>
+              ))}
+            </section>
+          )}
           {result && result.words.some((w) => w.score !== null && w.score < 80) && <p className="text-center text-xs text-muted">Appuie sur un mot pour l&apos;entendre lentement.</p>}
-          {result && result.weakSounds.length > 0 && (
+          {result && result.engine === "azure" && result.weakSounds.length > 0 && (
             <p className="text-center text-xs text-muted">
               Son{result.weakSounds.length > 1 ? "s" : ""} à soigner : {result.weakSounds.map((s) => `/${s.phoneme}/`).join(" ")}
             </p>
@@ -283,17 +432,18 @@ export function Shadowing() {
           {error && <p className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
 
           <div className="mt-auto flex flex-col items-center gap-3">
+            {phase === "recording" && interim && <p className="max-w-xs text-center text-sm text-muted">« {interim} »</p>}
             <button
               type="button"
-              onClick={() => (status === "recording" ? void stopRecording() : void startRecording())}
-              disabled={status === "scoring" || status === "playing"}
-              aria-label={status === "recording" ? "Arrêter et noter" : "Je répète"}
-              className={`relative grid h-24 w-24 place-items-center rounded-full text-accent-contrast shadow-lg transition disabled:opacity-50 ${status === "recording" ? "bg-listening" : "bg-accent"}`}
-              style={status === "recording" ? { boxShadow: `0 0 0 ${Math.round(6 + level * 26)}px rgba(255, 138, 61, 0.25)` } : undefined}
+              onClick={() => (phase === "recording" ? void stopRecording() : void startRecording())}
+              disabled={phase === "scoring" || phase === "playing" || capture === "none"}
+              aria-label={phase === "recording" ? "Arrêter et noter" : "Je répète"}
+              className={`relative grid h-24 w-24 place-items-center rounded-full text-accent-contrast shadow-lg transition disabled:opacity-50 ${phase === "recording" ? "bg-listening" : "bg-accent"}`}
+              style={phase === "recording" ? { boxShadow: `0 0 0 ${Math.round(6 + (capture === "phone" ? 0.4 : level) * 26)}px rgba(255, 138, 61, 0.25)` } : undefined}
             >
-              {status === "scoring" ? (
+              {phase === "scoring" ? (
                 <span className="text-sm font-bold">…</span>
-              ) : status === "recording" ? (
+              ) : phase === "recording" ? (
                 <svg aria-hidden="true" width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
@@ -305,11 +455,20 @@ export function Shadowing() {
               )}
             </button>
             <span className="text-sm text-muted">
-              {status === "recording" ? "Je t'écoute… appuie pour arrêter" : status === "scoring" ? "Je note ta phrase…" : result ? "Réessaie, ou passe à la suivante" : "Appuie, répète la phrase, appuie à nouveau"}
+              {phase === "recording"
+                ? capture === "phone"
+                  ? "Je t'écoute… je m'arrête tout seul à la fin de la phrase"
+                  : "Je t'écoute… appuie pour arrêter"
+                : phase === "scoring"
+                  ? "Je note ta phrase…"
+                  : result
+                    ? "Réessaie, ou passe à la suivante"
+                    : "Appuie, puis répète la phrase"}
             </span>
-            <button type="button" onClick={next} disabled={status === "recording" || status === "scoring"} className={`h-12 w-full rounded-2xl text-sm font-bold disabled:opacity-50 ${result ? "bg-accent text-accent-contrast" : "border border-line bg-elevated"}`}>
+            <button type="button" onClick={next} disabled={phase === "recording" || phase === "scoring"} className={`h-12 w-full rounded-2xl text-sm font-bold disabled:opacity-50 ${result ? "bg-accent text-accent-contrast" : "border border-line bg-elevated"}`}>
               {result ? "Phrase suivante" : "Passer"}
             </button>
+            {status && <span className="text-[11px] text-muted">Notation : {engineLabel}</span>}
           </div>
         </>
       ) : setup && phrases.length === 0 ? (
@@ -326,9 +485,9 @@ function WordChip({ word, onPlay }: { word: WordScore; onPlay: () => void }) {
   }
   const omitted = word.errorType === "Omission";
   return (
-    <button type="button" onClick={onPlay} className={`rounded-md border px-1.5 font-semibold ${TONE_CLASS[tone]} ${omitted ? "opacity-70" : ""}`} aria-label={`${word.word}, ${omitted ? "oublié" : `${word.score} sur 100`}. Écouter lentement`}>
+    <button type="button" onClick={onPlay} className={`rounded-md border px-1.5 font-semibold ${TONE_CLASS[tone]} ${omitted ? "opacity-70" : ""}`} aria-label={`${word.word}, ${omitted ? "pas entendu" : `${word.score} sur 100`}. Écouter lentement`}>
       {word.word}
-      {omitted && <span className="ml-1 text-xs font-normal">(oublié)</span>}
+      {omitted && <span className="ml-1 text-xs font-normal">(pas entendu)</span>}
     </button>
   );
 }
@@ -349,7 +508,7 @@ function SoundChips({ sounds }: { sounds: SoundStat[] }) {
     <ul className="flex flex-wrap gap-2">
       {sounds.map((s) => (
         <li key={s.phoneme} className={`rounded-full border px-2.5 py-1 font-mono text-sm ${TONE_CLASS[scoreTone(s.score)]}`} title={`${s.attempts} essais`}>
-          /{s.phoneme}/ {s.score}
+          {s.phoneme} {s.score}
         </li>
       ))}
     </ul>
@@ -369,11 +528,11 @@ function Summary({ done, total, language, onPlayWord, onRestart }: { done: Done[
   const weak = [...sounds.entries()].map(([phoneme, v]) => ({ phoneme, score: Math.round(v.reduce((a, b) => a + b, 0) / v.length), attempts: v.length })).sort((a, b) => a.score - b.score).slice(0, 4);
   const message =
     average === null
-      ? "Série terminée. Configure Azure pour avoir des notes."
+      ? "Série terminée sans note. Réessaie quand le micro est autorisé."
       : average >= 80
         ? "Très clair. On monte la difficulté la prochaine fois."
         : average >= 60
-          ? "On te comprend bien. Encore quelques sons à soigner."
+          ? "On te comprend bien. Encore quelques mots à soigner."
           : "C'est en travaillant ces mots-là que tu gagneras le plus.";
 
   return (
