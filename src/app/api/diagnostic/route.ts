@@ -5,7 +5,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import tls from "node:tls";
 import postgres from "postgres";
-import { db, normalizeDatabaseUrl, resetDbBreaker, withTimeout } from "@/lib/db";
+import { applySchema, db, normalizeDatabaseUrl, resetDbBreaker, withTimeout } from "@/lib/db";
 
 /**
  * Diagnostic pas à pas de la base de données : résolution du nom, connexion
@@ -122,7 +122,23 @@ export async function GET() {
   steps.push({ name: "Authentification Postgres", ok: !pgRes.error, detail: pgRes.error ? errText(pgRes.error) : (pgRes.value ?? ""), ms: pgRes.ms });
   if (pgRes.error) return Response.json({ steps, host, port, region: process.env.VERCEL_REGION ?? null });
 
-  // 5. Le chemin réel de l'app : connexion partagée + création/contrôle des tables.
+  // 5. Création / mise à jour des tables, instruction par instruction (verrou : 4 s max chacune).
+  const applyRes = await timed(() => withTimeout(applySchema(url.toString()), 40000));
+  const stepsDone = applyRes.value ?? [];
+  const failedStep = stepsDone.find((s) => s.error);
+  steps.push({
+    name: "Création des tables",
+    ok: !applyRes.error && !failedStep,
+    detail: applyRes.error
+      ? errText(applyRes.error)
+      : failedStep
+        ? `bloqué à « ${failedStep.statement} » après ${failedStep.ms} ms : ${failedStep.error}`
+        : stepsDone.map((s) => `${s.ms} ms`).join(", ") + ` (${stepsDone.length} instructions)`,
+    ms: applyRes.ms,
+  });
+  if (applyRes.error || failedStep) return Response.json({ steps, host, port, region: process.env.VERCEL_REGION ?? null });
+
+  // 5 bis. Le chemin réel de l'app : connexion partagée + contrôle des tables.
   const schemaRes = await timed(async () => {
     const shared = await withTimeout(db(), 25000);
     if (!shared) throw new Error("DATABASE_URL absente");

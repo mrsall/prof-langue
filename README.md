@@ -55,6 +55,13 @@ Si tu préfères le faire à la main : agent → **Security** → **Overrides** 
 2. Dans le projet, bouton **Connect** en haut → onglet **Transaction pooler** (ou « Session pooler ») → copie la chaîne qui commence par `postgresql://` et remplace `[YOUR-PASSWORD]` par ton mot de passe.
 3. Dans Vercel, ajoute cette chaîne sous le nom `DATABASE_URL`, puis Redeploy. Les tables se créent toutes seules à la première ouverture. La page **Réglages** indique « Base de données : Prête ».
 
+### Si Réglages dit « la création des tables a échoué » ou « bloquée »
+
+L'app crée ses tables toute seule, mais Supabase peut la bloquer si une table est ouverte dans l'éditeur du tableau de bord. Deux solutions :
+
+1. Ferme les onglets Supabase (Table Editor, SQL Editor), attends une minute, puis « Réessayer » dans Réglages.
+2. Ou applique le schéma à la main : Réglages → Base de données → « SQL de secours » → Copier, puis dans Supabase → SQL Editor → New query → coller → Run. Chaque ligne est sans danger si la table existe déjà.
+
 ### 2 ter. La clé Azure pour la prononciation (V4, facultatif)
 
 La prononciation fonctionne sans rien configurer, avec la reconnaissance vocale du téléphone. Azure n'apporte qu'une note son par son plus fine ; il demande une carte bancaire à l'inscription. Si tu veux l'essayer un jour :
