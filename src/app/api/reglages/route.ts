@@ -61,7 +61,7 @@ export async function GET() {
       sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
       sql<{ day: string }[]>`select distinct to_char((started_at at time zone 'Africa/Dakar')::date, 'YYYY-MM-DD') as day
         from sessions where seconds >= 30 order by 1 desc limit 400`,
-    ]), 8000);
+    ]), 15000);
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
       fr: fr ? { level: fr.level, date: fr.date } : null,

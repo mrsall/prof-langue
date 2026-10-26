@@ -6,6 +6,18 @@ import postgres from "postgres";
  * continue avec le stockage du téléphone.
  */
 type Sql = ReturnType<typeof postgres>;
+type PgOptions = NonNullable<Parameters<typeof postgres>[1]>;
+
+/**
+ * Options communes. `max_pipeline: 1` = une requête à la fois sur la connexion :
+ * le pooler Supabase (Supavisor) laisse pendre les requêtes envoyées en rafale
+ * (« pipeline »), d'où des pages qui attendaient 8 à 20 s alors que chaque
+ * requête prend quelques millisecondes. L'option existe à l'exécution mais
+ * manque dans les types de la bibliothèque, d'où la conversion.
+ */
+function pgOptions(url: string, extra: PgOptions): PgOptions {
+  return { ssl: url.includes("localhost") ? undefined : "require", max: 1, prepare: false, max_pipeline: 1, connect_timeout: 8, ...extra } as PgOptions;
+}
 
 const globalForDb = globalThis as unknown as {
   __profLangueSql?: Sql;
@@ -67,13 +79,7 @@ export async function db(): Promise<Sql | null> {
   }
   const url = normalizeDatabaseUrl(rawUrl);
   if (!globalForDb.__profLangueSql) {
-    globalForDb.__profLangueSql = postgres(url, {
-      ssl: url.includes("localhost") ? undefined : "require",
-      max: 1,
-      prepare: false, // compatible avec le pooler Supabase en mode transaction
-      idle_timeout: 20,
-      connect_timeout: 8,
-    });
+    globalForDb.__profLangueSql = postgres(url, pgOptions(url, { idle_timeout: 20 }));
   }
   const sql = globalForDb.__profLangueSql;
   if (!globalForDb.__profLangueSchema) {
@@ -201,14 +207,7 @@ export async function schemaComplete(sql: Sql) {
  * Renvoie le détail de chaque étape ; s'arrête à la première erreur.
  */
 export async function applySchema(url: string): Promise<SchemaStepResult[]> {
-  const setup = postgres(url, {
-    ssl: url.includes("localhost") ? undefined : "require",
-    max: 1,
-    prepare: false,
-    idle_timeout: 2,
-    connect_timeout: 8,
-    onnotice: () => undefined, // « existe déjà » n'est pas une erreur
-  });
+  const setup = postgres(url, pgOptions(url, { idle_timeout: 2, onnotice: () => undefined })); // « existe déjà » n'est pas une erreur
   const results: SchemaStepResult[] = [];
   try {
     await setup.unsafe("set lock_timeout = '4s'; set statement_timeout = '12s'");
