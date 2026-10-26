@@ -120,13 +120,13 @@ export function SettingsV3() {
     }
   };
 
-  const [diag, setDiag] = useState<{ steps: { name: string; ok: boolean; detail: string; ms: number }[] } | null>(null);
+  const [diag, setDiag] = useState<{ steps: { name: string; ok: boolean; detail: string; ms: number }[]; region?: string | null; host?: string } | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
   const runDiag = async () => {
     setDiagBusy(true);
     try {
       const res = await fetch("/api/diagnostic");
-      setDiag((await res.json()) as { steps: { name: string; ok: boolean; detail: string; ms: number }[] });
+      setDiag((await res.json()) as { steps: { name: string; ok: boolean; detail: string; ms: number }[]; region?: string | null; host?: string });
     } catch {
       setDiag({ steps: [{ name: "Diagnostic", ok: false, detail: "impossible de joindre le serveur de l'app", ms: 0 }] });
     } finally {
@@ -155,11 +155,17 @@ export function SettingsV3() {
             {state.dbInfo.passwordPlaceholder ? " · mot de passe non remplacé ✗" : ""}
           </p>
         )}
-        {state.db && state.dbError && (
-          <div className="flex flex-col gap-2">
-            <button type="button" disabled={diagBusy} onClick={runDiag} className="h-11 rounded-xl bg-accent text-sm font-bold text-accent-contrast disabled:opacity-60">
-              {diagBusy ? "Diagnostic en cours (jusqu'à 30 s)…" : "Lancer le diagnostic détaillé"}
+        {state.db && (
+          <div id="diagnostic" className="flex flex-col gap-2">
+            <button type="button" disabled={diagBusy} onClick={runDiag} className={`h-11 rounded-xl text-sm font-bold disabled:opacity-60 ${state.dbError ? "bg-accent text-accent-contrast" : "border border-line bg-bg"}`}>
+              {diagBusy ? "Diagnostic en cours (jusqu'à 60 s)…" : state.dbError ? "Lancer le diagnostic détaillé" : "Vérifier la base (diagnostic)"}
             </button>
+            {diag && (diag.region || diag.host) && (
+              <p className="text-xs text-muted">
+                Serveur Vercel : {diag.region ?? "?"} · base : {diag.host ?? "?"}
+                {diag.region && diag.host && !diag.host.includes("eu-") && !diag.host.includes("localhost") ? " · la base n'est pas en Europe : chaque requête traverse l'océan, d'où la lenteur." : ""}
+              </p>
+            )}
             {diag && (
               <ul className="flex flex-col gap-1 rounded-xl bg-bg p-3 text-xs">
                 {diag.steps.map((st) => (
