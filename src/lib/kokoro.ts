@@ -12,7 +12,6 @@ import type { Language } from "@/config/personalities";
  */
 
 const KOKORO_URL = "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm";
-const PHONEMIZER_URL = "https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/+esm";
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
 export type KokoroDevice = "webgpu" | "wasm";
@@ -29,7 +28,6 @@ type KokoroModel = {
 type KokoroModule = {
   KokoroTTS: { from_pretrained: (id: string, options: { dtype: string; device: KokoroDevice; progress_callback?: (p: KokoroProgress) => void }) => Promise<KokoroModel> };
 };
-type PhonemizerModule = { phonemize: (text: string, language?: string) => Promise<string[] | string> };
 
 /** Voix proposées, de la meilleure à la moins bonne selon la fiche du modèle. */
 export const KOKORO_VOICES: Record<Language, { id: string; label: string }[]> = {
@@ -47,7 +45,6 @@ export const KOKORO_VOICES: Record<Language, { id: string; label: string }[]> = 
 const importFromUrl = new Function("u", "return import(u)") as (url: string) => Promise<unknown>;
 
 let modelPromise: Promise<{ tts: KokoroModel; device: KokoroDevice }> | null = null;
-let phonemizerPromise: Promise<PhonemizerModule> | null = null;
 
 export function kokoroSupported() {
   return typeof window !== "undefined" && typeof WebAssembly !== "undefined";
@@ -81,14 +78,18 @@ export function loadKokoro(options: { device?: KokoroDevice; onProgress?: (p: Ko
   return modelPromise;
 }
 
-async function phonemizer() {
-  if (!phonemizerPromise) {
-    phonemizerPromise = (importFromUrl(PHONEMIZER_URL) as Promise<PhonemizerModule>).catch((error) => {
-      phonemizerPromise = null;
-      throw error;
-    });
+const phonemeCache = new Map<string, string>();
+
+/** Phonèmes français calculés par le serveur (/api/phonemes) en un seul appel, gardés en mémoire. */
+async function frenchPhonemes(sentences: string[]) {
+  const missing = sentences.filter((s) => !phonemeCache.has(s));
+  if (missing.length > 0) {
+    const res = await fetch("/api/phonemes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sentences: missing, language: "fr" }) });
+    const data = (await res.json().catch(() => ({}))) as { phonemes?: string[]; error?: string };
+    if (!res.ok || !data.phonemes || data.phonemes.length !== missing.length) throw new Error(data.error ?? "Phonétisation du français impossible.");
+    missing.forEach((s, i) => phonemeCache.set(s, data.phonemes![i]));
   }
-  return phonemizerPromise;
+  return sentences.map((s) => phonemeCache.get(s) ?? "");
 }
 
 /** Découpe en phrases courtes : le modèle accepte au plus ~500 symboles d'un coup. */
@@ -115,13 +116,14 @@ export async function synthesize(text: string, options: { language: Language; vo
   const start = performance.now();
   const chunks: Float32Array[] = [];
   let phonemesOut = "";
-  for (const sentence of splitSentences(text)) {
+  const sentences = splitSentences(text);
+  // Le français n'est pas dans la liste de kokoro-js : le serveur phonétise avec eSpeak NG complet.
+  const french = options.language === "fr" ? await frenchPhonemes(sentences) : [];
+  for (const [i, sentence] of sentences.entries()) {
     let audio: RawAudio;
     if (options.language === "fr") {
-      // Le français n'est pas dans la liste de kokoro-js : on phonétise nous-mêmes (eSpeak NG).
-      const { phonemize } = await phonemizer();
-      const raw = await phonemize(sentence, "fr-fr");
-      const phonemes = (Array.isArray(raw) ? raw.join(" ") : raw).trim();
+      const phonemes = french[i];
+      if (!phonemes) continue;
       phonemesOut += (phonemesOut ? " " : "") + phonemes;
       const { input_ids } = tts.tokenizer(phonemes, { truncation: true });
       audio = await tts.generate_from_ids(input_ids, { voice, speed });
