@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
+  // eSpeak NG (WebAssembly) est chargé tel quel par Node, pas par le bundler.
+  serverExternalPackages: ["espeak-ng"],
   partialPrefetching: true,
   async headers() {
     // Page Kokoro : ces deux en-têtes permettent le calcul multi-cœurs dans le navigateur.
