@@ -4,6 +4,7 @@ export const maxDuration = 30;
 import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, SCHEMA_SQL, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
 import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
+import { geminiAvailable } from "@/lib/gemini";
 
 /**
  * Réglages et état général pour l'accueil et la page Réglages.
@@ -26,6 +27,8 @@ export type ReglagesState = {
   pronunciation: { configured: boolean; region: string | null; locales: { en: string; fr: string } };
   /** SQL complet du schéma, pour l'appliquer à la main dans Supabase si besoin. */
   schemaSql: string;
+  /** Voix Google (Gemini) : clé présente ou non. */
+  gemini: { configured: boolean };
 };
 
 export async function GET() {
@@ -44,6 +47,7 @@ export async function GET() {
     streak: null,
     pronunciation: { configured: pronunciationAvailable(), region: process.env.AZURE_SPEECH_REGION?.trim().toLowerCase() || null, locales: { en: localeFor("en"), fr: localeFor("fr") } },
     schemaSql: SCHEMA_SQL,
+    gemini: { configured: geminiAvailable() },
   };
   if (!state.db) return Response.json(state);
   try {

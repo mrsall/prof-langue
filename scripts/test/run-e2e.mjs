@@ -50,6 +50,8 @@ const env = {
   ELEVENLABS_API_KEY: "test",
   ELEVENLABS_AGENT_ID: "test",
   ELEVENLABS_API_BASE: `http://localhost:${MOCK_PORT}`,
+  GEMINI_API_KEY: "test",
+  GEMINI_API_BASE: `http://localhost:${MOCK_PORT}`,
   MOCK_PORT: String(MOCK_PORT),
 };
 

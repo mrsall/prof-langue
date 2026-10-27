@@ -13,18 +13,19 @@ import { speakText, speechSynthesisAvailable, splitVoiceSegments, type SpeakHand
  *               (le français bascule sur ElevenLabs) ;
  *  - "phone"  : voix de synthèse du téléphone, gratuite, de dépannage.
  */
-export type VoiceChoice = "eleven" | "kokoro" | "phone";
+export type VoiceChoice = "eleven" | "gemini" | "kokoro" | "phone";
 
 export const VOICE_CHOICE_KEY = "prof-langue:voice-choice";
 
 export const VOICE_CHOICES: { key: VoiceChoice; label: string; hint: string }[] = [
   { key: "eleven", label: "ElevenLabs", hint: "Voix naturelle des deux langues. Consomme des caractères de ton abonnement, bien moins chers que les minutes de conversation." },
+  { key: "gemini", label: "Google (gratuite)", hint: "Voix Google naturelle, français et anglais, gratuite avec une clé Google AI Studio (Réglages). Si elle manque, ElevenLabs prend le relais." },
   { key: "kokoro", label: "Kokoro (anglais, gratuit)", hint: "Voix naturelle fabriquée dans le téléphone, zéro crédit. Anglais seulement : le français passe par ElevenLabs. 90 Mo à charger la première fois." },
   { key: "phone", label: "Téléphone", hint: "Voix de synthèse du téléphone, gratuite, moins agréable. Utile sans réseau rapide." },
 ];
 
 export function parseVoiceChoice(raw: string | null | undefined): VoiceChoice {
-  return raw === "kokoro" || raw === "phone" ? raw : "eleven";
+  return raw === "kokoro" || raw === "phone" || raw === "gemini" ? raw : "eleven";
 }
 
 export type Speaker = {
@@ -141,10 +142,11 @@ function phoneSpeaker(language: Language): Speaker {
   };
 }
 
-function elevenSpeaker(language: Language, personalityId: string | null): Speaker {
+/** Voix fabriquée par le serveur (/api/tts) : ElevenLabs, ou Google avec repli ElevenLabs. */
+function serverSpeaker(engine: "eleven" | "gemini", language: Language, personalityId: string | null): Speaker {
   const fallback = speechSynthesisAvailable() ? phoneSpeaker(language) : null;
   return {
-    choice: "eleven",
+    choice: engine,
     preload: async () => undefined,
     speak: (text, rate) => {
       const segments = splitVoiceSegments(text);
@@ -161,8 +163,15 @@ function elevenSpeaker(language: Language, personalityId: string | null): Speake
                 speed: String(clampRate(rate, 0.7, 1.2)),
                 personality: personalityId ?? "",
                 role: seg.alt ? "judge" : "main",
+                engine,
               });
-              const res = await fetch(`/api/tts?${q.toString()}`);
+              let res = await fetch(`/api/tts?${q.toString()}`);
+              if (!res.ok && engine === "gemini") {
+                // Voix Google indisponible (clé absente, quota) : ElevenLabs lit cette réplique.
+                console.warn("Voix Google indisponible, repli ElevenLabs");
+                q.set("engine", "eleven");
+                res = await fetch(`/api/tts?${q.toString()}`);
+              }
               if (!res.ok) {
                 const data = (await res.json().catch(() => ({}))) as { error?: string };
                 throw new Error(data.error ?? `Voix indisponible (${res.status}).`);
@@ -249,5 +258,6 @@ export function createSpeaker(choice: VoiceChoice, options: { language: Language
   const personalityId = options.personalityId ?? null;
   if (choice === "phone") return phoneSpeaker(options.language);
   if (choice === "kokoro" && options.language === "en") return kokoroSpeaker(personalityId);
-  return elevenSpeaker(options.language, personalityId);
+  if (choice === "gemini") return serverSpeaker("gemini", options.language, personalityId);
+  return serverSpeaker("eleven", options.language, personalityId);
 }

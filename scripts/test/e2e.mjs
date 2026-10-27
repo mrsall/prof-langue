@@ -44,26 +44,29 @@ async function step(name, fn) {
 const STUBS = `
   (() => {
     window.__nextSpeech = "";
+    window.__speechQueue = [];
     window.__spoken = [];
+    // Faux micro : « a ... b » arrive en deux morceaux séparés de 900 ms, comme une vraie pause ;
+    // le téléphone s'arrête après chaque morceau (onend) et l'app doit le relancer.
     class FakeRecognition {
       constructor() { this.lang = ""; this.continuous = false; this.interimResults = false; this.maxAlternatives = 1; this.onresult = null; this.onerror = null; this.onend = null; this.onspeechstart = null; this.onspeechend = null; this._stopped = false; }
       start() {
         const self = this;
-        setTimeout(() => {
-          if (self._stopped) return;
-          const text = window.__nextSpeech || "";
-          if (text) {
-            window.__nextSpeech = "";
+        if (window.__nextSpeech) { window.__speechQueue = window.__nextSpeech.split(" ... "); window.__nextSpeech = ""; self._first = true; }
+        const part = window.__speechQueue.shift();
+        if (part) {
+          const delay = self._first ? 100 : 900;
+          self._first = false;
+          setTimeout(() => {
+            if (self._stopped) return;
             self.onspeechstart && self.onspeechstart();
-            setTimeout(() => {
-              self.onresult && self.onresult({ resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: text, confidence: 0.9 } } } });
-              self.onspeechend && self.onspeechend();
-              self.onend && self.onend();
-            }, 150);
-          } else {
-            setTimeout(() => { if (!self._stopped) { self.onend && self.onend(); } }, 400);
-          }
-        }, 100);
+            self.onresult && self.onresult({ resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: part, confidence: 0.9 } } } });
+            self.onspeechend && self.onspeechend();
+            self.onend && self.onend();
+          }, delay);
+        } else {
+          setTimeout(() => { if (!self._stopped) { self.onend && self.onend(); } }, 400);
+        }
       }
       stop() { this._stopped = true; const self = this; setTimeout(() => self.onend && self.onend(), 20); }
       abort() { this._stopped = true; }
@@ -172,6 +175,12 @@ try {
       if (!res.ok() || !(res.headers()["content-type"] ?? "").startsWith("audio/")) throw new Error(`tts ${q} : HTTP ${res.status()} ${res.headers()["content-type"]}`);
     }
   });
+  await step("Voix Google (/api/tts?engine=gemini) et son diagnostic", async () => {
+    const res = await page.request.get(`${BASE}/api/tts?text=Bonjour&lang=fr&personality=prof&engine=gemini`);
+    if (!res.ok() || !(res.headers()["content-type"] ?? "").startsWith("audio/wav")) throw new Error(`tts gemini : HTTP ${res.status()} ${res.headers()["content-type"]}`);
+    const diag = await (await page.request.get(`${BASE}/api/diagnostic/gemini`)).json();
+    if (!diag.ok || !/tts/.test(diag.model ?? "")) throw new Error(JSON.stringify(diag).slice(0, 200));
+  });
   await step("Diagnostic Claude : réponse avec du texte", async () => {
     const res = await page.request.get(`${BASE}/api/diagnostic/claude`);
     const data = await res.json();
@@ -242,7 +251,7 @@ try {
     await page.evaluate(() => {
       window.__nextSpeech = "VIDE";
     });
-    await waitBubble("je n'ai pas bien suivi", 25000);
+    await waitBubble("souci de mon côté", 25000);
     await noBlockingError();
   });
   await step("Terminer → bilan avec corrections et bouton de prononciation", async () => {
@@ -287,6 +296,31 @@ try {
   });
   await step("Aucune erreur JavaScript dans la page", async () => {
     if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Séance éco avec la voix Google
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "gemini", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Séance éco avec la voix Google, Max, français");
+  await step("Max parle avec la voix Google, Cherif répond, Max enchaîne", async () => {
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    const header = await page.locator("header").first().textContent();
+    if (!/Google/.test(header ?? "")) throw new Error(`en-tête : ${header}`);
+    await page.evaluate(() => {
+      window.__nextSpeech = "hier j'ai regardé un match";
+    });
+    await waitBubble("après le café", 25000);
+    if (fallbackWarnings.length) throw new Error(fallbackWarnings[0]);
+    await noBlockingError();
+  });
+  await step("Une phrase avec une pause au milieu arrive entière", async () => {
+    // Le faux micro envoie d'abord un morceau provisoire, puis la suite : l'app doit attendre le vrai silence.
+    await page.evaluate(() => {
+      window.__nextSpeech = "hier j'ai bu mon café ... et après je suis sorti";
+    });
+    await waitBubble("et après je suis sorti", 25000);
+    await noBlockingError();
   });
   await page.context().close();
 
