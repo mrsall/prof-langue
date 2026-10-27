@@ -14,7 +14,7 @@ import {
   type Personality,
 } from "@/config/personalities";
 import { SPEEDS, SPEED_ORDER, SPEED_RESUME_MESSAGES, isSpeedKey, speedValue, type SpeedKey } from "@/config/speeds";
-import { EcoEngine, type EcoMode } from "@/lib/eco-engine";
+import { EcoEngine, type EcoMode, type EcoTiming } from "@/lib/eco-engine";
 import { VOICE_CHOICES, VOICE_CHOICE_KEY, createSpeaker, parseVoiceChoice, unlockAudio, type VoiceChoice } from "@/lib/voice-engine";
 import { CORRECTION_LEVELS, CORRECTION_ORDER, isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
 import { randomTopic } from "@/config/topics";
@@ -56,6 +56,11 @@ type SessionParams = {
 };
 
 const TEST_MAX_SECONDS = 330;
+
+/** 1 234 ms → « 1,2 s ». */
+function seconds(ms: number) {
+  return `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
+}
 const REVISION_STORAGE_KEY = "prof-langue:revision-words";
 
 const SPEED_KEY = "prof-langue:speed";
@@ -166,6 +171,8 @@ function AppInner() {
   const [ecoStatus, setEcoStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [ecoMode, setEcoMode] = useState<EcoMode>("idle");
   const [interim, setInterim] = useState("");
+  // Temps de la dernière réplique en mode éco (pour repérer ce qui traîne : Claude ou la voix).
+  const [timing, setTiming] = useState<EcoTiming | null>(null);
   // Avertissement passager (la séance continue), effacé tout seul.
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -495,6 +502,7 @@ function AppInner() {
                 }
               },
               onInterim: (text) => setInterim(text),
+              onTiming: setTiming,
             },
           });
           ecoRef.current = eng;
@@ -901,7 +909,7 @@ function AppInner() {
           : holding
             ? "Je t'écoute…"
             : isSpeaking
-              ? `${displayName} parle…`
+              ? `${displayName} parle…${isEco && timing ? ` (Claude ${seconds(timing.claudeMs)}, voix ${seconds(timing.voiceMs)})` : ""}`
               : isEco && ecoMode === "thinking"
                 ? `${displayName} réfléchit…`
                 : isEco && interim

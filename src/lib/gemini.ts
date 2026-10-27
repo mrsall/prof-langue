@@ -84,8 +84,16 @@ export async function geminiSpeak(options: { text: string; voice: string; langua
  */
 export function tidyPcm(raw: Buffer, sampleRate: number) {
   let pcm = raw.length % 2 === 1 ? raw.subarray(0, raw.length - 1) : raw;
-  const samples = pcm.length / 2;
+  let samples = pcm.length / 2;
   if (samples < sampleRate / 10) return pcm;
+  // Queue de « friture » (grésillement) : défaut connu de la voix Google, on la coupe.
+  let fadeSeconds = 0.02;
+  const tail = noiseTailStart(pcm, sampleRate);
+  if (tail !== null) {
+    pcm = pcm.subarray(0, Math.min(samples, tail + Math.round(sampleRate * 0.15)) * 2);
+    samples = pcm.length / 2;
+    fadeSeconds = 0.15;
+  }
   // Fin : on garde 120 ms après le dernier échantillon audible.
   const threshold = 300;
   let last = samples - 1;
@@ -93,7 +101,7 @@ export function tidyPcm(raw: Buffer, sampleRate: number) {
   const keep = Math.min(samples, last + 1 + Math.round(sampleRate * 0.12));
   pcm = Buffer.from(pcm.subarray(0, keep * 2));
   const total = pcm.length / 2;
-  const fade = Math.min(Math.round(sampleRate * 0.02), Math.floor(total / 2));
+  const fade = Math.min(Math.round(sampleRate * fadeSeconds), Math.floor(total / 2));
   for (let i = 0; i < fade; i++) {
     const gain = i / fade;
     pcm.writeInt16LE(Math.round(pcm.readInt16LE(i * 2) * gain), i * 2);
@@ -101,6 +109,47 @@ export function tidyPcm(raw: Buffer, sampleRate: number) {
     pcm.writeInt16LE(Math.round(pcm.readInt16LE(j * 2) * gain), j * 2);
   }
   return pcm;
+}
+
+/**
+ * Repère une queue de bruit blanc en fin de clip (grésillement « grrrss ») :
+ * fenêtres de 10 ms où le signal change de signe très souvent (bruit) alors
+ * qu'une voix change peu. Un « s » final est aussi du bruit, mais court : on
+ * ne coupe qu'au-delà de 300 ms de friture, en gardant les 150 premières ms.
+ * Renvoie l'index (en échantillons) où la queue commence, ou null.
+ */
+export function noiseTailStart(pcm: Buffer, sampleRate: number): number | null {
+  const win = Math.round(sampleRate * 0.01);
+  const windows = Math.floor(pcm.length / 2 / win);
+  if (windows < 10) return null;
+  const rms: number[] = [];
+  const zcr: number[] = [];
+  let peak = 0;
+  for (let w = 0; w < windows; w++) {
+    let sum = 0;
+    let crossings = 0;
+    let prev = pcm.readInt16LE(w * win * 2);
+    for (let i = 1; i < win; i++) {
+      const v = pcm.readInt16LE((w * win + i) * 2);
+      sum += v * v;
+      if (v >= 0 !== prev >= 0) crossings++;
+      prev = v;
+    }
+    const r = Math.sqrt(sum / win);
+    rms.push(r);
+    zcr.push(crossings / win);
+    if (r > peak) peak = r;
+  }
+  const silent = (w: number) => rms[w] < Math.max(150, peak * 0.02);
+  const noisy = (w: number) => !silent(w) && zcr[w] > 0.3;
+  let w = windows - 1;
+  let noisyWindows = 0;
+  while (w >= 0 && (silent(w) || noisy(w))) {
+    if (noisy(w)) noisyWindows++;
+    w--;
+  }
+  if (noisyWindows * win < sampleRate * 0.3) return null;
+  return (w + 1) * win;
 }
 
 function pcmToWav(pcm: Buffer, sampleRate: number) {

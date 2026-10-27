@@ -32,7 +32,8 @@ export type Speaker = {
   choice: VoiceChoice;
   /** Prépare ce qu'il faut (modèle Kokoro) ; peut être long la première fois. */
   preload: (onProgress?: (p: KokoroProgress) => void) => Promise<void>;
-  speak: (text: string, rate: number) => SpeakHandle;
+  /** `onStart` est appelé quand le son commence vraiment (après la fabrication de la voix). */
+  speak: (text: string, rate: number, onStart?: () => void) => SpeakHandle;
 };
 
 // ---- lecteur audio partagé ----
@@ -103,10 +104,11 @@ export function unlockAudio() {
 let playerGeneration = 0;
 
 /** Joue des fichiers à la suite ; `cancel` arrête net. */
-function playUrls(urls: string[], rate = 1): SpeakHandle {
+function playUrls(urls: string[], rate = 1, onStart?: () => void): SpeakHandle {
   const a = getPlayer();
   const generation = ++playerGeneration;
   let cancelled = false;
+  let started = false;
   let release: (() => void) | null = null;
   const stale = () => cancelled || generation !== playerGeneration;
   const done = (async () => {
@@ -114,6 +116,11 @@ function playUrls(urls: string[], rate = 1): SpeakHandle {
       if (stale()) return;
       await new Promise<void>((resolve, reject) => {
         release = resolve;
+        a.onplaying = () => {
+          if (started || stale()) return;
+          started = true;
+          onStart?.();
+        };
         a.onended = () => resolve();
         a.onerror = () => (stale() ? resolve() : reject(new Error("Lecture audio impossible.")));
         a.src = url;
@@ -131,6 +138,7 @@ function playUrls(urls: string[], rate = 1): SpeakHandle {
     if (generation === playerGeneration) {
       a.onended = null;
       a.onerror = null;
+      a.onplaying = null;
     }
     release = null;
   });
@@ -172,7 +180,12 @@ function phoneSpeaker(language: Language): Speaker {
     preload: async () => {
       if (!speechSynthesisAvailable()) throw new Error("Ce téléphone n'a pas de voix de synthèse.");
     },
-    speak: (text, rate) => speakText(text, { language, rate: clampRate(rate, 0.5, 1.5) }),
+    speak: (text, rate, onStart) => {
+      const handle = speakText(text, { language, rate: clampRate(rate, 0.5, 1.5) });
+      // Voix locale : elle démarre tout de suite (et certains téléphones n'annoncent pas le début).
+      onStart?.();
+      return handle;
+    },
   };
 }
 
@@ -182,56 +195,64 @@ function serverSpeaker(engine: "eleven" | "gemini", language: Language, personal
   return {
     choice: engine,
     preload: async () => undefined,
-    speak: (text, rate) => {
+    speak: (text, rate, onStart) => {
       // Une réplique longue part en plusieurs morceaux (le serveur coupe au-delà de 600 caractères).
       const segments = splitVoiceSegments(text).flatMap((seg) => chunkForTts(seg.text).map((part) => ({ text: part, alt: seg.alt })));
       let cancelled = false;
       let inner: SpeakHandle | null = null;
+      const fetchPart = async (seg: { text: string; alt?: boolean }) => {
+        const q = new URLSearchParams({
+          text: seg.text,
+          lang: language,
+          speed: String(clampRate(rate, 0.7, 1.2)),
+          personality: personalityId ?? "",
+          role: seg.alt ? "judge" : "main",
+          engine,
+        });
+        let res = await fetch(`/api/tts?${q.toString()}`);
+        if (!res.ok && engine === "gemini") {
+          // Voix Google indisponible (clé absente, quota) : ElevenLabs lit cette réplique.
+          console.warn("Voix Google indisponible, repli ElevenLabs");
+          q.set("engine", "eleven");
+          res = await fetch(`/api/tts?${q.toString()}`);
+        }
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error ?? `Voix indisponible (${res.status}).`);
+        }
+        return URL.createObjectURL(await res.blob());
+      };
       const done = (async () => {
-        let urls: string[];
-        try {
-          urls = await Promise.all(
-            segments.map(async (seg) => {
-              const q = new URLSearchParams({
-                text: seg.text,
-                lang: language,
-                speed: String(clampRate(rate, 0.7, 1.2)),
-                personality: personalityId ?? "",
-                role: seg.alt ? "judge" : "main",
-                engine,
-              });
-              let res = await fetch(`/api/tts?${q.toString()}`);
-              if (!res.ok && engine === "gemini") {
-                // Voix Google indisponible (clé absente, quota) : ElevenLabs lit cette réplique.
-                console.warn("Voix Google indisponible, repli ElevenLabs");
-                q.set("engine", "eleven");
-                res = await fetch(`/api/tts?${q.toString()}`);
-              }
-              if (!res.ok) {
-                const data = (await res.json().catch(() => ({}))) as { error?: string };
-                throw new Error(data.error ?? `Voix indisponible (${res.status}).`);
-              }
-              return URL.createObjectURL(await res.blob());
-            }),
-          );
-        } catch (error) {
-          // ElevenLabs injoignable : la voix du téléphone prend le relais pour cette réplique.
-          console.warn("Voix ElevenLabs indisponible, repli sur la voix du téléphone :", error instanceof Error ? error.message : error);
-          if (!fallback || cancelled) throw error;
-          inner = fallback.speak(text, rate);
-          await inner.done;
-          return;
-        }
-        if (cancelled) {
-          urls.forEach((u) => URL.revokeObjectURL(u));
-          return;
-        }
+        // Tous les morceaux se fabriquent en même temps ; le premier se joue dès qu'il est prêt.
+        const jobs = segments.map((seg) => fetchPart(seg).then((url) => ({ url }), (error: unknown) => ({ error })));
+        const dropRest = (from: number) => jobs.slice(from).forEach((j) => void j.then((r) => "url" in r && URL.revokeObjectURL(r.url)));
         // ElevenLabs applique déjà la vitesse ; la voix Google est lue à vitesse réglée par le lecteur (hauteur conservée).
-        inner = playUrls(urls, engine === "gemini" ? clampRate(rate, 0.7, 1.2) : 1);
-        try {
-          await inner.done;
-        } finally {
-          urls.forEach((u) => URL.revokeObjectURL(u));
+        const playbackRate = engine === "gemini" ? clampRate(rate, 0.7, 1.2) : 1;
+        for (let i = 0; i < jobs.length; i++) {
+          const result = await jobs[i];
+          if (cancelled) return dropRest(i);
+          if ("error" in result) {
+            // ElevenLabs injoignable : la voix du téléphone prend le relais pour ce qui reste à dire.
+            console.warn("Voix ElevenLabs indisponible, repli sur la voix du téléphone :", result.error instanceof Error ? result.error.message : result.error);
+            dropRest(i + 1);
+            if (!fallback) throw result.error;
+            inner = fallback.speak(
+              segments
+                .slice(i)
+                .map((s) => s.text)
+                .join(" "),
+              rate,
+              onStart,
+            );
+            await inner.done;
+            return;
+          }
+          inner = playUrls([result.url], playbackRate, onStart);
+          try {
+            await inner.done;
+          } finally {
+            URL.revokeObjectURL(result.url);
+          }
         }
       })();
       return {
@@ -252,7 +273,7 @@ function kokoroSpeaker(personalityId: string | null): Speaker {
     preload: async (onProgress) => {
       await loadKokoro({ onProgress });
     },
-    speak: (text, rate) => {
+    speak: (text, rate, onStart) => {
       const segments = splitVoiceSegments(text);
       let cancelled = false;
       let inner: SpeakHandle | null = null;
@@ -270,7 +291,7 @@ function kokoroSpeaker(personalityId: string | null): Speaker {
           if (!result || cancelled) return;
           next = i + 1 < jobs.length ? synthesize(jobs[i + 1].sentence, { language, voice: jobs[i + 1].voice, speed }) : null;
           const url = URL.createObjectURL(result.blob);
-          inner = playUrls([url], 1);
+          inner = playUrls([url], 1, onStart);
           try {
             await inner.done;
           } finally {
