@@ -1356,7 +1356,7 @@ function HomeScreen({
             </p>
             {engine === "eco" && (
               <>
-                <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix du mode éco">
+                <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix du mode éco">
                   {VOICE_CHOICES.map((v) => (
                     <button
                       key={v.key}

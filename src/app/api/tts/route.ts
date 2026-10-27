@@ -2,6 +2,8 @@ import { connection } from "next/server";
 import { isLanguage } from "@/config/personalities";
 import { resolveVoiceId } from "@/lib/tts-voices";
 import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
+import { geminiAvailable, geminiSpeak } from "@/lib/gemini";
+import { geminiVoiceFor } from "@/config/gemini-voices";
 
 export const maxDuration = 30;
 
@@ -10,15 +12,29 @@ export const maxDuration = 30;
  * ou un mot raté rejoué lentement). GET pour que le téléphone puisse la jouer
  * directement dans un lecteur audio au moment où Cherif appuie.
  *
- *   /api/tts?text=...&lang=en|fr&speed=0.7..1.2&personality=ami&role=main|judge
+ *   /api/tts?text=...&lang=en|fr&speed=0.7..1.2&personality=ami&role=main|judge&engine=eleven|gemini
  */
 const MODEL = process.env.ELEVENLABS_TTS_MODEL || "eleven_flash_v2_5";
 
 export async function GET(request: Request) {
   await connection();
+  const url = new URL(request.url);
+  const engine = url.searchParams.get("engine") === "gemini" ? "gemini" : "eleven";
+  if (engine === "gemini") {
+    const text = (url.searchParams.get("text") ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
+    const language = isLanguage(url.searchParams.get("lang")) ? (url.searchParams.get("lang") as "en" | "fr") : "en";
+    if (!text) return Response.json({ error: "Texte manquant." }, { status: 400 });
+    if (!geminiAvailable()) return Response.json({ error: "Voix Google non configurée : ajoute GEMINI_API_KEY dans Vercel (clé gratuite sur aistudio.google.com)." }, { status: 503 });
+    try {
+      const role = url.searchParams.get("role") === "judge" ? "judge" : "main";
+      const { wav } = await geminiSpeak({ text, language, voice: geminiVoiceFor(url.searchParams.get("personality"), language, role), speed: Number(url.searchParams.get("speed") ?? "1") || 1 });
+      return new Response(new Uint8Array(wav), { headers: { "Content-Type": "audio/wav", "Cache-Control": "private, max-age=86400", "Content-Length": String(wav.length) } });
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Voix Google indisponible." }, { status: 502 });
+    }
+  }
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) return Response.json({ error: "ELEVENLABS_API_KEY manquante." }, { status: 503 });
-  const url = new URL(request.url);
   const text = (url.searchParams.get("text") ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
   const lang = url.searchParams.get("lang") ?? "en";
   const language = isLanguage(lang) ? lang : "en";

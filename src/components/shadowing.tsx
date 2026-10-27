@@ -215,7 +215,7 @@ export function Shadowing() {
       return;
     }
     const audio = getAudio();
-    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof`;
+    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof&engine=${voiceChoice === "gemini" ? "gemini" : "eleven"}`;
     audio.onended = () => setPhase((s) => (s === "playing" ? "idle" : s));
     audio.onerror = () => {
       // La voix naturelle n'a pas pu être chargée : on lit avec la voix du téléphone.
@@ -260,7 +260,7 @@ export function Shadowing() {
       return;
     }
     if (capture === "phone") {
-      const handle = recognizeOnce({ lang: LOCALES[language], onInterim: setInterim, maxMs: MAX_RECORD_SECONDS * 1000 });
+      const handle = recognizeOnce({ lang: LOCALES[language], onInterim: setInterim, maxMs: MAX_RECORD_SECONDS * 1000, endSilenceMs: 1500 });
       recognizerRef.current = handle;
       navigator.vibrate?.(30);
       setPhase("recording");
@@ -424,7 +424,7 @@ export function Shadowing() {
                 Lentement
               </button>
             </div>
-            <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix qui lit la phrase">
+            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix qui lit la phrase">
               {VOICE_CHOICES.map((v) => (
                 <button
                   key={v.key}

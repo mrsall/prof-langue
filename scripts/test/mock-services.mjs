@@ -132,6 +132,15 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ---- Google (Gemini)
+  if (req.method === "GET" && path === "/v1beta/models") {
+    return json(res, 200, { models: [{ name: "models/gemini-2.5-flash-preview-tts", supportedGenerationMethods: ["generateContent"] }, { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] }] });
+  }
+  if (req.method === "POST" && /^\/v1beta\/models\/[^/]+:generateContent$/.test(path)) {
+    const pcm = Buffer.alloc(24000 * 2 * 0.3); // 0,3 s de silence 24 kHz
+    return json(res, 200, { candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: pcm.toString("base64") } }] } }] });
+  }
+
   // ---- ElevenLabs
   if (req.method === "GET" && path === "/v1/voices") {
     return json(res, 200, {

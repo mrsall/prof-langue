@@ -64,71 +64,107 @@ const ERROR_MESSAGES: Record<string, string> = {
   "language-not-supported": "Cette langue n'est pas reconnue par ce téléphone.",
 };
 
-/** Écoute une prise de parole (jusqu'au silence ou à `stop()`). */
-export function recognizeOnce(options: { lang: string; onInterim?: (text: string) => void; maxMs?: number }): RecognizeHandle {
+/**
+ * Écoute une prise de parole. La reconnaissance du téléphone, laissée à elle-même,
+ * s'arrête à la première pause d'une seconde : un débutant fait des pauses au
+ * milieu de ses phrases, donc on écoute en continu et c'est nous qui décidons
+ * de la fin, après `endSilenceMs` sans nouveau mot (`null` = jusqu'à `stop()`,
+ * pour l'appui pour parler).
+ */
+export function recognizeOnce(options: { lang: string; onInterim?: (text: string) => void; maxMs?: number; endSilenceMs?: number | null; noSpeechMs?: number }): RecognizeHandle {
   const Ctor = getSpeechRecognitionCtor();
   if (!Ctor) {
     return { stop: () => undefined, abort: () => undefined, done: Promise.resolve({ text: "", durationMs: null, confidence: null, error: "Pas de reconnaissance vocale sur ce téléphone." }) };
   }
+  const endSilenceMs = options.endSilenceMs === undefined ? 1800 : options.endSilenceMs;
+  const noSpeechMs = options.noSpeechMs ?? 9000;
   const rec = new Ctor();
   rec.lang = options.lang;
-  rec.continuous = false;
+  rec.continuous = true;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
-  let finalText = "";
+  const finals: string[] = [];
   let interimText = "";
   let confidence: number | null = null;
   let speechStart: number | null = null;
-  let speechEnd: number | null = null;
+  let lastActivity: number | null = null;
   let errorMessage: string | undefined;
   let settled = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let wantStop = false;
+  const startedAt = performance.now();
+  let maxTimer: ReturnType<typeof setTimeout> | null = null;
+  let ticker: ReturnType<typeof setInterval> | null = null;
+
+  const currentText = () => `${finals.join(" ")} ${interimText}`.replace(/\s+/g, " ").trim();
+  const requestStop = () => {
+    wantStop = true;
+    try {
+      rec.stop();
+    } catch {
+      // déjà arrêté
+    }
+  };
 
   const done = new Promise<RecognizeOutcome>((resolve) => {
     const finish = () => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
-      const text = (finalText || interimText).replace(/\s+/g, " ").trim();
-      const durationMs = speechStart !== null ? Math.max(0, Math.round((speechEnd ?? performance.now()) - speechStart)) : null;
+      if (maxTimer) clearTimeout(maxTimer);
+      if (ticker) clearInterval(ticker);
+      const text = currentText();
+      const durationMs = speechStart !== null && lastActivity !== null ? Math.max(0, Math.round(lastActivity - speechStart)) : null;
       resolve({ text, durationMs, confidence, error: errorMessage });
     };
     rec.onspeechstart = () => {
-      speechStart = performance.now();
+      if (speechStart === null) speechStart = performance.now();
+      lastActivity = performance.now();
     };
     rec.onspeechend = () => {
-      speechEnd = performance.now();
+      lastActivity = performance.now();
     };
     rec.onresult = (event) => {
-      if (speechStart === null) speechStart = performance.now();
+      const now = performance.now();
+      if (speechStart === null) speechStart = now;
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         const alt = result[0];
         if (!alt) continue;
         if (result.isFinal) {
-          finalText = `${finalText} ${alt.transcript}`.trim();
+          const t = alt.transcript.trim();
+          // Sur iPhone, le même résultat peut revenir plusieurs fois.
+          if (t && finals.at(-1) !== t) finals.push(t);
           if (typeof alt.confidence === "number" && alt.confidence > 0) confidence = alt.confidence;
         } else {
           interim += alt.transcript;
         }
       }
-      // Sur iPhone, le résultat n'est parfois jamais marqué « final » : on garde le provisoire.
-      interimText = interim.trim() || interimText;
-      options.onInterim?.(`${finalText} ${interim}`.trim());
+      interimText = interim.trim();
+      lastActivity = now;
+      options.onInterim?.(currentText());
     };
     rec.onerror = (event) => {
       if (event.error === "no-speech" || event.error === "aborted") return;
       errorMessage = ERROR_MESSAGES[event.error] ?? `Reconnaissance vocale : ${event.error}`;
     };
-    rec.onend = finish;
-    timer = setTimeout(() => {
-      try {
-        rec.stop();
-      } catch {
-        finish();
+    rec.onend = () => {
+      // Le téléphone s'arrête parfois tout seul en plein milieu : on repart tant qu'on n'a pas fini.
+      if (!wantStop && !settled && !errorMessage && performance.now() - startedAt < (options.maxMs ?? 60000)) {
+        try {
+          rec.start();
+          return;
+        } catch {
+          // impossible de relancer : on rend ce qu'on a
+        }
       }
-    }, options.maxMs ?? 20000);
+      finish();
+    };
+    ticker = setInterval(() => {
+      const now = performance.now();
+      if (lastActivity !== null && endSilenceMs !== null && currentText() && now - lastActivity >= endSilenceMs) requestStop();
+      else if (lastActivity === null && endSilenceMs !== null && now - startedAt >= noSpeechMs) requestStop();
+    }, 150);
+    maxTimer = setTimeout(requestStop, options.maxMs ?? 60000);
     try {
       rec.start();
     } catch (error) {
@@ -138,15 +174,10 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
   });
 
   return {
-    stop: () => {
-      try {
-        rec.stop();
-      } catch {
-        // déjà arrêté
-      }
-    },
+    stop: requestStop,
     abort: () => {
-      finalText = "";
+      wantStop = true;
+      finals.length = 0;
       interimText = "";
       try {
         rec.abort();

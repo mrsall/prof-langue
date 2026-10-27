@@ -148,6 +148,25 @@ export function SettingsV3() {
     }
   };
 
+  const [gemini, setGemini] = useState<{ ok: boolean; model: string | null; ms: number; error: string | null } | null>(null);
+  const [geminiBusy, setGeminiBusy] = useState(false);
+  const testGemini = async () => {
+    setGeminiBusy(true);
+    try {
+      const res = await fetch("/api/diagnostic/gemini");
+      const data = (await res.json()) as { ok: boolean; model: string | null; ms: number; error: string | null };
+      setGemini(data);
+      if (data.ok) {
+        const audio = new Audio(`/api/tts?engine=gemini&lang=fr&personality=prof&text=${encodeURIComponent("Bonjour Cherif, je suis la voix Google. On commence quand tu veux.")}`);
+        void audio.play().catch(() => undefined);
+      }
+    } catch {
+      setGemini({ ok: false, model: null, ms: 0, error: "impossible de joindre le serveur de l'app" });
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
   if (state === null) {
     return <p className="text-sm text-muted">{error ?? "Chargement des réglages…"}</p>;
   }
@@ -240,6 +259,36 @@ export function SettingsV3() {
             </p>
             {claude.sample && <p className="mt-1">« {claude.sample} »</p>}
             {claude.error && <p className="mt-1 text-danger">{claude.error}</p>}
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Voix Google (gratuite)</h2>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.gemini.configured ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>{state.gemini.configured ? "Clé présente" : "À configurer"}</span>
+        </div>
+        {state.gemini.configured ? (
+          <>
+            <p className="text-sm text-muted">Choisis « Google (gratuite) » comme voix du mode éco sur l&apos;accueil, ou dans Prononciation. Si Google ne répond pas, ElevenLabs prend le relais tout seul.</p>
+            <button type="button" disabled={geminiBusy} onClick={testGemini} className="h-11 rounded-xl border border-line bg-bg text-sm font-bold disabled:opacity-60">
+              {geminiBusy ? "Test en cours…" : "Tester la voix Google (elle parle)"}
+            </button>
+            {gemini && (
+              <p className={`rounded-xl bg-bg px-3 py-2 font-mono text-xs ${gemini.ok ? "text-muted" : "text-danger"}`}>
+                {gemini.ok ? `modèle ${gemini.model} · ${gemini.ms} ms` : gemini.error}
+              </p>
+            )}
+          </>
+        ) : (
+          <div className="flex flex-col gap-2 text-sm text-muted">
+            <p>Une voix naturelle en français et en anglais, gratuite, sans carte bancaire :</p>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>Va sur aistudio.google.com avec ton compte Google, puis « Get API key » → « Create API key ».</li>
+              <li>Copie la clé (elle commence par AIza).</li>
+              <li>Dans Vercel → Settings → Environment Variables : ajoute <code className="font-mono">GEMINI_API_KEY</code>, puis Redeploy.</li>
+              <li>Reviens ici : la carte passe à « Clé présente » et un bouton te fait entendre la voix.</li>
+            </ol>
           </div>
         )}
       </section>

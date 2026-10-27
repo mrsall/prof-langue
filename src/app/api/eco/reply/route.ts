@@ -15,8 +15,8 @@ type Body = SessionBody & { transcript?: TranscriptLine[] };
 
 /** Si Claude ne renvoie rien (rare), le personnage relance au lieu de casser la séance. */
 const FALLBACK_LINES: Record<"en" | "fr", string> = {
-  en: "Sorry, I missed that. Can you say it again, a bit slower?",
-  fr: "Pardon, je n'ai pas bien suivi. Tu peux redire ça, un peu plus lentement ?",
+  en: "Sorry, I had a small hiccup on my side, not yours. Can you say that again?",
+  fr: "Pardon, j'ai eu un petit souci de mon côté, pas du tien. Tu peux redire ta phrase ?",
 };
 
 const ECO_RULES: Record<"en" | "fr", string> = {

@@ -41,13 +41,14 @@ export type EcoOptions = {
   callbacks: EcoCallbacks;
 };
 
+// Quand c'est le serveur qui a flanché, on le dit : ce n'est jamais la faute de Cherif.
 const RETRY_LINES: Record<Language, string> = {
-  en: "Sorry, I missed that. Can you say it again?",
-  fr: "Pardon, je n'ai pas bien suivi. Tu peux redire ça ?",
+  en: "Sorry, I had a small connection hiccup on my side. Can you say that again?",
+  fr: "Pardon, j'ai eu un petit souci de connexion de mon côté. Tu peux redire ta phrase ?",
 };
 
 const SILENCE_MS = 1300;
-const MAX_UTTERANCE_MS = 25000;
+const MAX_UTTERANCE_MS = 45000;
 
 export class EcoEngine {
   private history: TranscriptLine[];
@@ -246,7 +247,8 @@ export class EcoEngine {
     this.setMode("listening");
     const lang = LOCALES[this.options.language];
     if (this.usesPhoneRecognition) {
-      const handle = recognizeOnce({ lang, onInterim: this.options.callbacks.onInterim, maxMs: manual ? 60000 : MAX_UTTERANCE_MS });
+      // Mains libres : fin de phrase après 1,8 s de silence ; appui pour parler : jusqu'au relâchement.
+      const handle = recognizeOnce({ lang, onInterim: this.options.callbacks.onInterim, maxMs: manual ? 90000 : MAX_UTTERANCE_MS, endSilenceMs: manual ? null : 1800 });
       this.recognizing = handle;
       const outcome = await handle.done;
       if (token !== this.listenToken || this.ended) return;
