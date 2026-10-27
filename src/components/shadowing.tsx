@@ -10,7 +10,7 @@ import { LOCALES, recognizeOnce, speakText, speechRecognitionAvailable, speechSy
 import { scoreTone, type ScoreTone } from "@/config/shadowing";
 import { LANGUAGE_LABELS, isLanguage, type Language } from "@/config/personalities";
 import { useLocalStorage } from "@/lib/use-local-storage";
-import { VOICE_CHOICES, VOICE_CHOICE_KEY, parseVoiceChoice, type VoiceChoice } from "@/lib/voice-engine";
+import { VOICE_CHOICES, VOICE_CHOICE_KEY, parseVoiceChoice, unlockAudio, type VoiceChoice } from "@/lib/voice-engine";
 import { kokoroLoaded, loadKokoro, synthesize } from "@/lib/kokoro";
 import { kokoroVoiceFor } from "@/config/kokoro-voices";
 
@@ -206,6 +206,8 @@ export function Shadowing() {
   function play(text: string, speed: number) {
     if (!language) return;
     stopPlayback();
+    // Dans le geste d'appui : sur iPhone, un son fabriqué plus tard (Kokoro) ne peut démarrer que si un lecteur a déjà joué ici.
+    unlockAudio();
     if (phoneVoice) {
       playWithPhone(text, speed);
       return;

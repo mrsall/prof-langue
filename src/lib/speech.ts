@@ -65,11 +65,45 @@ const ERROR_MESSAGES: Record<string, string> = {
 };
 
 /**
+ * Fusionne ce que le téléphone a compris sans jamais doubler un mot.
+ * Android renvoie souvent la phrase entière depuis le début à chaque fois
+ * (« salut », « salut je », « salut je m'appelle »…) : un nouveau morceau qui
+ * commence par ce qu'on a déjà remplace le tout ; sinon il s'ajoute.
+ */
+export function mergeTranscripts(pieces: string[]): string {
+  const norm = (t: string) => t.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ").trim();
+  let acc = "";
+  for (const raw of pieces) {
+    const piece = raw.replace(/\s+/g, " ").trim();
+    if (!piece) continue;
+    const a = norm(acc);
+    const p = norm(piece);
+    if (!a) acc = piece;
+    else if (p === a || a.endsWith(p)) continue; // déjà entendu
+    else if (p.startsWith(a)) acc = piece; // version cumulée plus longue
+    else {
+      // Chevauchement partiel (« je m'appelle Cherif » puis « Cherif et j'habite ») : on recolle.
+      const aw = a.split(" ");
+      const pw = p.split(" ");
+      let overlap = 0;
+      for (let k = Math.min(aw.length, pw.length, 6); k > 0; k--) {
+        if (aw.slice(-k).join(" ") === pw.slice(0, k).join(" ")) {
+          overlap = k;
+          break;
+        }
+      }
+      acc = overlap > 0 ? `${acc} ${piece.split(" ").slice(overlap).join(" ")}`.trim() : `${acc} ${piece}`;
+    }
+  }
+  return acc;
+}
+
+/**
  * Écoute une prise de parole. La reconnaissance du téléphone, laissée à elle-même,
  * s'arrête à la première pause d'une seconde : un débutant fait des pauses au
- * milieu de ses phrases, donc on écoute en continu et c'est nous qui décidons
- * de la fin, après `endSilenceMs` sans nouveau mot (`null` = jusqu'à `stop()`,
- * pour l'appui pour parler).
+ * milieu de ses phrases, donc on la relance tant qu'il n'y a pas eu
+ * `endSilenceMs` sans nouveau mot (`null` = jusqu'à `stop()`, pour l'appui
+ * pour parler). Les morceaux sont fusionnés sans doublon (voir mergeTranscripts).
  */
 export function recognizeOnce(options: { lang: string; onInterim?: (text: string) => void; maxMs?: number; endSilenceMs?: number | null; noSpeechMs?: number }): RecognizeHandle {
   const Ctor = getSpeechRecognitionCtor();
@@ -78,12 +112,16 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
   }
   const endSilenceMs = options.endSilenceMs === undefined ? 1800 : options.endSilenceMs;
   const noSpeechMs = options.noSpeechMs ?? 9000;
+  const maxMs = options.maxMs ?? 60000;
   const rec = new Ctor();
   rec.lang = options.lang;
-  rec.continuous = true;
+  // Mode non continu : fiable sur Android et iPhone. C'est nous qui relançons.
+  rec.continuous = false;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
+  /** Morceaux finalisés par le téléphone, dans l'ordre. */
   const finals: string[] = [];
+  /** Dernier provisoire de la prise en cours. */
   let interimText = "";
   let confidence: number | null = null;
   let speechStart: number | null = null;
@@ -91,11 +129,12 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
   let errorMessage: string | undefined;
   let settled = false;
   let wantStop = false;
+  let running = false;
   const startedAt = performance.now();
   let maxTimer: ReturnType<typeof setTimeout> | null = null;
   let ticker: ReturnType<typeof setInterval> | null = null;
 
-  const currentText = () => `${finals.join(" ")} ${interimText}`.replace(/\s+/g, " ").trim();
+  const currentText = () => mergeTranscripts([...finals, interimText]);
   const requestStop = () => {
     wantStop = true;
     try {
@@ -115,6 +154,15 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
       const durationMs = speechStart !== null && lastActivity !== null ? Math.max(0, Math.round(lastActivity - speechStart)) : null;
       resolve({ text, durationMs, confidence, error: errorMessage });
     };
+    const launch = () => {
+      try {
+        rec.start();
+        running = true;
+        return true;
+      } catch {
+        return false;
+      }
+    };
     rec.onspeechstart = () => {
       if (speechStart === null) speechStart = performance.now();
       lastActivity = performance.now();
@@ -125,50 +173,58 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
     rec.onresult = (event) => {
       const now = performance.now();
       if (speechStart === null) speechStart = now;
+      // On relit toute la liste : certains téléphones renvoient tout depuis le début.
+      const finalPieces: string[] = [];
       let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
         const alt = result[0];
         if (!alt) continue;
         if (result.isFinal) {
-          const t = alt.transcript.trim();
-          // Sur iPhone, le même résultat peut revenir plusieurs fois.
-          if (t && finals.at(-1) !== t) finals.push(t);
+          finalPieces.push(alt.transcript);
           if (typeof alt.confidence === "number" && alt.confidence > 0) confidence = alt.confidence;
         } else {
-          interim += alt.transcript;
+          interim += ` ${alt.transcript}`;
         }
       }
+      // Les finaux de cette prise remplacent ceux de la même prise (pas ceux des prises précédentes).
+      finals.splice(takeIndex);
+      finals.push(...finalPieces);
       interimText = interim.trim();
-      lastActivity = now;
-      options.onInterim?.(currentText());
+      if (currentText() !== lastText) lastActivity = now;
+      lastText = currentText();
+      options.onInterim?.(lastText);
     };
     rec.onerror = (event) => {
       if (event.error === "no-speech" || event.error === "aborted") return;
       errorMessage = ERROR_MESSAGES[event.error] ?? `Reconnaissance vocale : ${event.error}`;
     };
     rec.onend = () => {
-      // Le téléphone s'arrête parfois tout seul en plein milieu : on repart tant qu'on n'a pas fini.
-      if (!wantStop && !settled && !errorMessage && performance.now() - startedAt < (options.maxMs ?? 60000)) {
-        try {
-          rec.start();
-          return;
-        } catch {
-          // impossible de relancer : on rend ce qu'on a
-        }
+      running = false;
+      // Le provisoire d'une prise terminée sans final devient un morceau à part entière.
+      if (interimText) {
+        finals.push(interimText);
+        interimText = "";
       }
+      takeIndex = finals.length;
+      const elapsed = performance.now() - startedAt;
+      const keepGoing = !wantStop && !settled && !errorMessage && elapsed < maxMs;
+      if (keepGoing && launch()) return;
       finish();
     };
+    let takeIndex = 0;
+    let lastText = "";
     ticker = setInterval(() => {
       const now = performance.now();
-      if (lastActivity !== null && endSilenceMs !== null && currentText() && now - lastActivity >= endSilenceMs) requestStop();
-      else if (lastActivity === null && endSilenceMs !== null && now - startedAt >= noSpeechMs) requestStop();
+      if (settled) return;
+      if (endSilenceMs !== null && lastActivity !== null && currentText() && now - lastActivity >= endSilenceMs) requestStop();
+      else if (endSilenceMs !== null && lastActivity === null && now - startedAt >= noSpeechMs) requestStop();
+      // Le téléphone a fini sa prise mais rien ne l'a relancé : on relance.
+      else if (!running && !wantStop && now - startedAt < maxMs) launch();
     }, 150);
-    maxTimer = setTimeout(requestStop, options.maxMs ?? 60000);
-    try {
-      rec.start();
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : "Impossible de démarrer l'écoute.";
+    maxTimer = setTimeout(requestStop, maxMs);
+    if (!launch()) {
+      errorMessage = "Impossible de démarrer l'écoute.";
       finish();
     }
   });

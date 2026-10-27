@@ -191,7 +191,11 @@ export class EcoEngine {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...this.options.body, transcript: history.slice(-40) }),
       });
-      const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string; fallback?: boolean };
+      const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string; fallback?: boolean; reason?: string };
+      if (res.ok && data.text && data.fallback) {
+        // La séance continue, mais on le dit : utile pour comprendre ce qui se passe chez Cherif.
+        this.options.callbacks.onError(`Claude a eu un raté (${data.reason ?? "?"}). Réglages → Tester Claude pour voir le détail.`, { fatal: false });
+      }
       if (!res.ok || !data.text) {
         const fatal = res.status === 503 || res.status === 401 || res.status === 400;
         this.options.callbacks.onError(data.error ?? "Le personnage n'a pas pu répondre.", { fatal });

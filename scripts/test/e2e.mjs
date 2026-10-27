@@ -57,12 +57,25 @@ const STUBS = `
         if (part) {
           const delay = self._first ? 100 : 900;
           self._first = false;
+          // Comme Android : d'abord des provisoires cumulés (« salut », « salut je »…), puis un final avec toute la prise.
+          const words = part.split(" ");
+          const emit = (list, final) => {
+            const results = { length: list.length };
+            list.forEach((t, i) => { results[i] = { isFinal: final && i === list.length - 1, length: 1, 0: { transcript: t, confidence: 0.9 } }; });
+            self.onresult && self.onresult({ resultIndex: 0, results });
+          };
           setTimeout(() => {
             if (self._stopped) return;
             self.onspeechstart && self.onspeechstart();
-            self.onresult && self.onresult({ resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: part, confidence: 0.9 } } } });
-            self.onspeechend && self.onspeechend();
-            self.onend && self.onend();
+            let n = 1;
+            const tick = () => {
+              if (self._stopped) return;
+              if (n < words.length) { emit([words.slice(0, n).join(" ")], false); n += 1; setTimeout(tick, 60); return; }
+              emit([part], true);
+              self.onspeechend && self.onspeechend();
+              self.onend && self.onend();
+            };
+            tick();
           }, delay);
         } else {
           setTimeout(() => { if (!self._stopped) { self.onend && self.onend(); } }, 400);
@@ -320,6 +333,9 @@ try {
       window.__nextSpeech = "hier j'ai bu mon café ... et après je suis sorti";
     });
     await waitBubble("et après je suis sorti", 25000);
+    const bubbles = await page.locator(transcript).allTextContents();
+    const mine = bubbles.find((t) => /et après je suis sorti/.test(t)) ?? "";
+    if (mine.toLowerCase() !== "hier j'ai bu mon café et après je suis sorti") throw new Error(`mots doublés ou manquants : « ${mine} »`);
     await noBlockingError();
   });
   await page.context().close();

@@ -87,9 +87,22 @@ export async function POST(request: Request) {
         role: "user",
         content: `${messages.at(-1)?.content as string}\n\n(${prepared.language === "en" ? "Answer in one or two spoken sentences, then ask a question." : "Réponds en une ou deux phrases parlées, puis pose une question."})`,
       };
-      const retry = await client.messages.create({ model, max_tokens: 260, system, messages: [...messages.slice(0, -1), nudge] });
+      const retry = await client.messages.create({ model, max_tokens: 400, system, messages: [...messages.slice(0, -1), nudge] });
       text = cleanText(retry);
-      if (!text) return Response.json({ text: FALLBACK_LINES[prepared.language], fallback: true, reason: `vide (${response.stop_reason ?? "?"})` });
+      if (!text) {
+        // Dernier essai avec une consigne minimale : si ça marche, le problème vient des consignes longues.
+        const simple = await client.messages.create({
+          model,
+          max_tokens: 400,
+          system: prepared.language === "en" ? `You are ${prepared.personality.name}, a friendly English conversation partner. Reply in one or two spoken sentences, then ask a question.` : `Tu es ${prepared.personality.name}, partenaire de conversation en français. Réponds en une ou deux phrases parlées, puis pose une question.`,
+          messages,
+        });
+        text = cleanText(simple);
+        const detail = `réponse vide : arrêt ${response.stop_reason ?? "?"}, blocs ${response.content.map((b) => b.type).join("+") || "aucun"}, modèle ${response.model}`;
+        if (!text) return Response.json({ text: FALLBACK_LINES[prepared.language], fallback: true, reason: detail });
+        return Response.json({ text, fallback: true, reason: `${detail} ; consigne simplifiée a répondu` });
+      }
+      return Response.json({ text, fallback: true, reason: `réponse vide puis seconde tentative réussie (arrêt ${response.stop_reason ?? "?"})` });
     }
     return Response.json({ text });
   } catch (error) {
