@@ -99,7 +99,7 @@ const STUBS = `
       speaking: false,
     }, configurable: true });
 
-    HTMLMediaElement.prototype.play = function () { const el = this; setTimeout(() => el.dispatchEvent(new Event("ended")), 120); return Promise.resolve(); };
+    HTMLMediaElement.prototype.play = function () { const el = this; setTimeout(() => el.dispatchEvent(new Event("playing")), 10); setTimeout(() => el.dispatchEvent(new Event("ended")), 120); return Promise.resolve(); };
     HTMLMediaElement.prototype.pause = function () {};
     HTMLMediaElement.prototype.load = function () {};
 

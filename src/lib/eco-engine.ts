@@ -24,7 +24,11 @@ export type EcoCallbacks = {
   onMessage: (message: { role: "user" | "agent"; message: string }) => void;
   onModeChange: (details: { mode: EcoMode }) => void;
   onInterim?: (text: string) => void;
+  /** Temps de la dernière réplique : réponse de Claude, puis fabrication de la voix jusqu'au premier son. */
+  onTiming?: (timing: EcoTiming) => void;
 };
+
+export type EcoTiming = { claudeMs: number; voiceMs: number };
 
 export type EcoOptions = {
   /** Corps envoyé à /api/eco/reply (personnalité, langue, sujet…), sans le transcript. */
@@ -72,6 +76,7 @@ export class EcoEngine {
   private level = 0;
   private listenToken = 0;
   private phoneEar: boolean;
+  private claudeMs = 0;
 
   constructor(private readonly options: EcoOptions) {
     this.history = [...(options.history ?? [])];
@@ -89,8 +94,9 @@ export class EcoEngine {
     return this.mode;
   }
 
+  /** Une voix est en cours (en fabrication ou en lecture) : un appui doit la couper. */
   get isSpeaking() {
-    return this.mode === "speaking";
+    return this.speaking !== null;
   }
 
   /** Niveau sonore approximatif pour animer l'avatar (0 à 1). */
@@ -136,7 +142,7 @@ export class EcoEngine {
       this.finishListening();
       return true;
     }
-    if (this.ended || this.mode === "thinking") return false;
+    if (this.ended || (this.mode === "thinking" && !this.speaking)) return false;
     this.stopSpeaking();
     this.muted = false;
     void this.listen(true);
@@ -145,7 +151,7 @@ export class EcoEngine {
 
   /** Cherif coupe la parole : on se tait et on écoute. */
   interrupt() {
-    if (this.mode !== "speaking") return;
+    if (!this.speaking) return;
     this.stopSpeaking();
     this.setMode("idle");
     if (!this.muted) void this.listen();
@@ -204,8 +210,16 @@ export class EcoEngine {
       // Les balises <voice> servent à la voix, pas à l'affichage.
       this.options.callbacks.onMessage({ role: "agent", message: text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
     }
-    this.setMode("speaking");
-    const handle = this.options.speaker.speak(text, rate);
+    // Tant que la voix se fabrique (ElevenLabs, Google), le personnage « réfléchit » ; il « parle » au premier son.
+    this.setMode("thinking");
+    const askedAt = performance.now();
+    let handle: SpeakHandle | null = null;
+    const started = () => {
+      if (!handle || this.speaking !== handle || this.ended) return;
+      this.options.callbacks.onTiming?.({ claudeMs: this.claudeMs, voiceMs: Math.round(performance.now() - askedAt) });
+      this.setMode("speaking");
+    };
+    handle = this.options.speaker.speak(text, rate, started);
     this.speaking = handle;
     try {
       await handle.done;
@@ -225,6 +239,8 @@ export class EcoEngine {
 
   private async ask(history: TranscriptLine[]): Promise<string | null> {
     this.setMode("thinking");
+    const startedAt = performance.now();
+    this.claudeMs = 0;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REPLY_TIMEOUT_MS);
     try {
@@ -235,6 +251,7 @@ export class EcoEngine {
         signal: controller.signal,
       });
       const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string; fallback?: boolean; reason?: string };
+      this.claudeMs = Math.round(performance.now() - startedAt);
       if (res.ok && data.text && data.fallback) {
         // La séance continue, mais on le dit : utile pour comprendre ce qui se passe chez Cherif.
         this.options.callbacks.onError(`Claude a eu un raté (${data.reason ?? "?"}). Réglages → Tester Claude pour voir le détail.`, { fatal: false });
