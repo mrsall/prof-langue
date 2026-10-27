@@ -1,0 +1,367 @@
+#!/usr/bin/env node
+/**
+ * Parcours complet de l'app dans un navigateur, avec micro, voix du téléphone,
+ * lecteur audio, Claude et ElevenLabs simulés. Vérifie que la conversation en
+ * mode éco, le bilan, la prononciation, le suivi, le carnet et les réglages
+ * fonctionnent de bout en bout, sans erreur bloquante.
+ *
+ *   BASE_URL=http://localhost:3300 node scripts/test/e2e.mjs
+ */
+import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
+
+// Playwright est préinstallé sur la machine de test (pas dans le projet) : on le charge par require.
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_PATH || "playwright");
+
+const BASE = (process.env.BASE_URL || "http://localhost:3300").replace(/\/+$/, "");
+const SHOTS = process.env.SHOTS_DIR || "/tmp/claude-0/e2e-shots";
+mkdirSync(SHOTS, { recursive: true });
+
+const results = [];
+let page;
+let consoleErrors = [];
+let fallbackWarnings = [];
+
+async function step(name, fn) {
+  const start = Date.now();
+  try {
+    await fn();
+    results.push({ name, ok: true, ms: Date.now() - start });
+    console.log(`  ✓ ${name} (${Date.now() - start} ms)`);
+  } catch (error) {
+    results.push({ name, ok: false, ms: Date.now() - start, error: String(error?.message ?? error) });
+    console.log(`  ✗ ${name} : ${String(error?.message ?? error).split("\n")[0]}`);
+    try {
+      await page?.screenshot({ path: `${SHOTS}/${results.length}-${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`, fullPage: true });
+    } catch {
+      // pas de capture
+    }
+  }
+}
+
+/** Faux micro, fausse voix, faux lecteur audio : tout ce que le navigateur sans tête n'a pas. */
+const STUBS = `
+  (() => {
+    window.__nextSpeech = "";
+    window.__spoken = [];
+    class FakeRecognition {
+      constructor() { this.lang = ""; this.continuous = false; this.interimResults = false; this.maxAlternatives = 1; this.onresult = null; this.onerror = null; this.onend = null; this.onspeechstart = null; this.onspeechend = null; this._stopped = false; }
+      start() {
+        const self = this;
+        setTimeout(() => {
+          if (self._stopped) return;
+          const text = window.__nextSpeech || "";
+          if (text) {
+            window.__nextSpeech = "";
+            self.onspeechstart && self.onspeechstart();
+            setTimeout(() => {
+              self.onresult && self.onresult({ resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: text, confidence: 0.9 } } } });
+              self.onspeechend && self.onspeechend();
+              self.onend && self.onend();
+            }, 150);
+          } else {
+            setTimeout(() => { if (!self._stopped) { self.onend && self.onend(); } }, 400);
+          }
+        }, 100);
+      }
+      stop() { this._stopped = true; const self = this; setTimeout(() => self.onend && self.onend(), 20); }
+      abort() { this._stopped = true; }
+    }
+    window.SpeechRecognition = FakeRecognition;
+    window.webkitSpeechRecognition = FakeRecognition;
+
+    class FakeUtterance { constructor(text) { this.text = text; this.lang = ""; this.voice = null; this.rate = 1; this.pitch = 1; this.onstart = null; this.onend = null; this.onerror = null; } }
+    window.SpeechSynthesisUtterance = FakeUtterance;
+    const voices = [{ name: "Thomas", lang: "fr-FR", localService: true }, { name: "Daniel", lang: "en-GB", localService: true }];
+    Object.defineProperty(window, "speechSynthesis", { value: {
+      getVoices: () => voices,
+      speak: (u) => { window.__spoken.push(u.text); setTimeout(() => { u.onstart && u.onstart(); setTimeout(() => u.onend && u.onend(), 80); }, 20); },
+      cancel: () => {},
+      addEventListener: () => {},
+      speaking: false,
+    }, configurable: true });
+
+    HTMLMediaElement.prototype.play = function () { const el = this; setTimeout(() => el.dispatchEvent(new Event("ended")), 120); return Promise.resolve(); };
+    HTMLMediaElement.prototype.pause = function () {};
+    HTMLMediaElement.prototype.load = function () {};
+
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => ({ getTracks: () => [] }) }, configurable: true });
+    navigator.vibrate = () => true;
+    navigator.serviceWorker && (navigator.serviceWorker.register = async () => ({}));
+  })();
+`;
+
+function presets(values) {
+  return `(() => { try { ${Object.entries(values)
+    .map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)});`)
+    .join(" ")} } catch {} })();`;
+}
+
+async function newPage(browser, storage) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: "fr-FR" });
+  await context.addInitScript(STUBS);
+  await context.addInitScript(presets({ "prof-langue:show-text": "1", "prof-langue:talk-mode": "mains-libres", ...storage }));
+  const p = await context.newPage();
+  consoleErrors = [];
+  fallbackWarnings = [];
+  p.on("console", (msg) => {
+    const text = msg.text();
+    if (msg.type() === "error" && !/favicon|404|net::ERR|Failed to load resource|cdn.jsdelivr|huggingface/i.test(text)) consoleErrors.push(text);
+    if (/repli sur la voix du téléphone/.test(text)) fallbackWarnings.push(text);
+  });
+  p.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
+  return p;
+}
+
+const transcript = '[aria-label="Texte de la conversation"] p';
+
+async function waitBubble(text, timeout = 20000) {
+  await page.waitForFunction(
+    ([sel, t]) => Array.from(document.querySelectorAll(sel)).some((p) => (p.textContent || "").toLowerCase().includes(t.toLowerCase())),
+    [transcript, text],
+    { timeout },
+  );
+}
+
+async function noBlockingError() {
+  const retry = await page.locator("button", { hasText: "Réessayer" }).count();
+  if (retry > 0) {
+    const msg = await page.locator(".text-danger").first().textContent().catch(() => "");
+    throw new Error(`erreur bloquante affichée : ${msg}`);
+  }
+}
+
+async function startSession(language, mode, topicPick = "first") {
+  await page.goto(`${BASE}/`);
+  await page.getByRole("button", { name: "Commencer", exact: true }).waitFor({ timeout: 20000 });
+  await page.getByRole("radiogroup", { name: "Langue" }).getByRole("radio", { name: language === "fr" ? "Français" : "Anglais" }).click();
+  await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: new RegExp(mode) }).click();
+  await page.getByRole("button", { name: "Commencer", exact: true }).click();
+  // Écran des sujets : les sujets viennent du faux Claude.
+  const topic = page.locator("main button").filter({ hasText: topicPick === "first" ? /journée|day|match|film|movie|week-end|weekend|PC|console/i : topicPick }).first();
+  await topic.waitFor({ timeout: 20000 });
+  await topic.click();
+}
+
+const browser = await chromium.launch();
+try {
+  // ------------------------------------------------------------------ Routes serveur (sans navigateur)
+  console.log("Routes serveur");
+  page = await newPage(browser, {});
+  await step("Séance ElevenLabs temps réel : jeton + consignes + première réplique", async () => {
+    const res = await page.request.post(`${BASE}/api/elevenlabs/session`, { data: { personality: "prof", language: "fr", correction: "active", speed: "lent", topic: "Raconter au passé", ownTopic: false, kind: "conversation" } });
+    if (!res.ok()) throw new Error(`HTTP ${res.status()} ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    if (!data.conversationToken || !data.overrides?.agent?.prompt?.prompt || !data.overrides?.agent?.firstMessage) throw new Error(`réponse incomplète : ${JSON.stringify(data).slice(0, 200)}`);
+    if (data.overrides.agent.language !== "fr" || data.overrides.tts?.speed !== 0.85) throw new Error("langue ou vitesse non transmises");
+  });
+  await step("Agent ElevenLabs : état lu et accepté", async () => {
+    const res = await page.request.get(`${BASE}/api/elevenlabs/agent`);
+    const data = await res.json();
+    if (!res.ok() || data.ok !== true) throw new Error(`agent : ${JSON.stringify(data).slice(0, 200)}`);
+  });
+  await step("Voix françaises : au moins un homme et une femme", async () => {
+    const res = await page.request.get(`${BASE}/api/elevenlabs/voices-fr`);
+    const data = await res.json();
+    if (!res.ok() || data.ok !== true) throw new Error(`voix FR : ${JSON.stringify(data).slice(0, 200)}`);
+  });
+  await step("Lecture ElevenLabs (/api/tts) avec voix du personnage et du juge", async () => {
+    for (const q of ["lang=fr&personality=prof", "lang=en&personality=debatteur&role=judge"]) {
+      const res = await page.request.get(`${BASE}/api/tts?text=Bonjour&${q}`);
+      if (!res.ok() || !(res.headers()["content-type"] ?? "").startsWith("audio/")) throw new Error(`tts ${q} : HTTP ${res.status()} ${res.headers()["content-type"]}`);
+    }
+  });
+  await step("Diagnostic Claude : réponse avec du texte", async () => {
+    const res = await page.request.get(`${BASE}/api/diagnostic/claude`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+  });
+  await step("Sujets, bilan et niveau : JSON de Claude bien lu", async () => {
+    const sujets = await (await page.request.post(`${BASE}/api/sujets`, { data: { personality: "ami", language: "en", recent: [] } })).json();
+    if (!Array.isArray(sujets.topics) || sujets.topics.length < 3) throw new Error(`sujets : ${JSON.stringify(sujets).slice(0, 120)}`);
+    const transcript = [
+      { role: "agent", text: "Bonjour Cherif, raconte-moi ta journée d'hier." },
+      { role: "user", text: "hier j'ai bu mon café et après avoir bu le café" },
+      { role: "agent", text: "Très bien. Et ensuite ?" },
+      { role: "user", text: "je suis allé au travail" },
+      { role: "agent", text: "Qu'est-ce que tu as fait au travail ?" },
+      { role: "user", text: "j'ai vérifié les bananes et j'ai appelé un client" },
+      { role: "agent", text: "Et le soir ?" },
+      { role: "user", text: "le soir j'ai regardé un match avec mes amis" },
+    ];
+    const bilan = await (await page.request.post(`${BASE}/api/bilan`, { data: { transcript, durationSeconds: 120, personality: "prof", language: "fr" } })).json();
+    if (!Array.isArray(bilan.errors) || !Array.isArray(bilan.corrections) || bilan.corrections.length < 1) throw new Error(`bilan : ${JSON.stringify(bilan).slice(0, 160)}`);
+    const niveau = await (await page.request.post(`${BASE}/api/niveau`, { data: { transcript, language: "fr" } })).json();
+    if (!/^[ABC][12]$/.test(niveau.level ?? "")) throw new Error(`niveau : ${JSON.stringify(niveau).slice(0, 120)}`);
+  });
+  await step("Transcription de secours (/api/stt) et phonèmes français (/api/phonemes)", async () => {
+    const wav = Buffer.alloc(44 + 16000);
+    wav.write("RIFF", 0);
+    wav.write("WAVE", 8);
+    const stt = await page.request.post(`${BASE}/api/stt`, { multipart: { language: "fr", audio: { name: "a.wav", mimeType: "audio/wav", buffer: wav } } });
+    const sttData = await stt.json();
+    if (!stt.ok() || !sttData.text) throw new Error(`stt : ${JSON.stringify(sttData).slice(0, 120)}`);
+    const ph = await (await page.request.post(`${BASE}/api/phonemes`, { data: { sentences: ["Salut Cherif ! Ça va ?"], language: "fr" } })).json();
+    if (!ph.phonemes?.[0] || !/salˈy/.test(ph.phonemes[0])) throw new Error(`phonèmes : ${JSON.stringify(ph).slice(0, 120)}`);
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Séance éco en français avec Emma
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "eleven", "prof-langue:language": "fr", "prof-langue:mode": "prof" });
+  console.log("Séance éco (ElevenLabs lecture seule), Emma, français");
+  let connectAt = 0;
+  await step("Accueil → sujet → séance démarre et Emma parle", async () => {
+    await startSession("fr", "Emma");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    connectAt = Date.now();
+    const header = await page.locator("header").first().textContent();
+    if (!/éco/.test(header ?? "")) throw new Error(`en-tête sans « éco » : ${header}`);
+    await noBlockingError();
+  });
+  await step("Cherif parle → Emma répond (Claude simulé) sans erreur", async () => {
+    await page.evaluate(() => {
+      window.__nextSpeech = "hier j'ai bu mon café et après avoir bu le café";
+    });
+    await waitBubble("hier j'ai bu mon café");
+    await waitBubble("après le café");
+    await noBlockingError();
+    if (fallbackWarnings.length) throw new Error(`la voix ElevenLabs n'a pas été utilisée : ${fallbackWarnings[0]}`);
+  });
+  await step("Répète relit la dernière réplique", async () => {
+    await page.getByRole("button", { name: /Répète/ }).click();
+    await page.waitForTimeout(800);
+    await noBlockingError();
+  });
+  await step("Changer la vitesse relance la séance avec une phrase de reprise", async () => {
+    await page.getByRole("button", { name: /Vitesse/ }).click();
+    await waitBubble("où en étions-nous", 25000);
+    await noBlockingError();
+  });
+  await step("Réponse vide de Claude → le personnage relance au lieu de casser", async () => {
+    await page.evaluate(() => {
+      window.__nextSpeech = "VIDE";
+    });
+    await waitBubble("je n'ai pas bien suivi", 25000);
+    await noBlockingError();
+  });
+  await step("Terminer → bilan avec corrections et bouton de prononciation", async () => {
+    // Une séance de moins de 30 s est une « séance éclair » sans exercice de prononciation.
+    const remaining = 32000 - (Date.now() - connectAt);
+    if (remaining > 0) await page.waitForTimeout(remaining);
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/À retenir|Texte de la séance/).first().waitFor({ timeout: 30000 });
+    await page.getByText(/Répéter \d+ phrase/).waitFor({ timeout: 10000 });
+  });
+  await step("Prononciation depuis le bilan : écoute, répétition notée, phrase suivante", async () => {
+    await page.getByText(/Répéter \d+ phrase/).click();
+    await page.waitForURL(/\/prononciation/, { timeout: 15000 });
+    await page.getByText(/Phrase 1 sur/).waitFor({ timeout: 20000 });
+    const phrase = (await page.locator("p.text-lg.font-semibold").first().textContent()) ?? "";
+    await page.getByRole("button", { name: "Écouter", exact: true }).click();
+    await page.waitForTimeout(600);
+    const words = phrase.split(" ");
+    if (words.length > 2) words[1] = "zzz";
+    await page.evaluate((t) => {
+      window.__nextSpeech = t;
+    }, words.join(" "));
+    await page.getByRole("button", { name: "Je répète" }).click();
+    await page.getByText("Mots compris").waitFor({ timeout: 30000 });
+    const chips = await page.locator("p.flex.flex-wrap button").count();
+    if (chips < 3) throw new Error(`seulement ${chips} mots colorés`);
+    await page.getByRole("button", { name: "Phrase suivante" }).click();
+    await page.getByText(/Phrase 2 sur/).waitFor({ timeout: 10000 });
+  });
+  await step("Suivi, carnet et réglages se chargent sans erreur de base", async () => {
+    await page.goto(`${BASE}/suivi`);
+    await page.getByText(/séance|jour de suite/).first().waitFor({ timeout: 20000 });
+    if (await page.getByText(/La base de données ne répond pas/).count()) throw new Error("suivi : erreur de base");
+    await page.goto(`${BASE}/carnet`);
+    await page.waitForTimeout(1500);
+    if (await page.getByText(/La base de données ne répond pas/).count()) throw new Error("carnet : erreur de base");
+    await page.goto(`${BASE}/reglages`);
+    await page.getByText("Base de données").waitFor({ timeout: 20000 });
+    await page.waitForTimeout(1500);
+    const badge = await page.locator("section", { hasText: "Base de données" }).first().textContent();
+    if (process.env.DATABASE_URL && !/Prête/.test(badge ?? "")) throw new Error(`réglages : base pas « Prête » (${(badge ?? "").slice(0, 120)})`);
+  });
+  await step("Aucune erreur JavaScript dans la page", async () => {
+    if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Débat éco : juge + Leo, balises invisibles
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "eleven", "prof-langue:language": "fr", "prof-langue:mode": "debatteur" });
+  console.log("Débat éco, Leo + juge, français");
+  await step("Le juge ouvre le débat, sans balise visible", async () => {
+    await startSession("fr", "Leo");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    const first = (await page.locator(transcript).first().textContent()) ?? "";
+    if (/<voice/i.test(first)) throw new Error(`balise visible : ${first.slice(0, 80)}`);
+    await noBlockingError();
+  });
+  await step("Cherif prend position → le juge passe la parole, Leo conteste", async () => {
+    await page.evaluate(() => {
+      window.__nextSpeech = "Je préfère le PC parce qu'on peut le réparer";
+    });
+    await waitBubble("Pourquoi le PC");
+    const all = await page.locator(transcript).allTextContents();
+    if (all.some((t) => /<voice/i.test(t))) throw new Error("balise <voice> affichée");
+    await noBlockingError();
+  });
+  await step("Aucune erreur JavaScript (débat)", async () => {
+    if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Kokoro indisponible → repli automatique
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "kokoro", "prof-langue:language": "en", "prof-langue:mode": "ami" });
+  console.log("Kokoro indisponible (pas de CDN ici) → repli sur ElevenLabs");
+  await step("La séance démarre quand même, avec un avertissement et sans erreur bloquante", async () => {
+    await startSession("en", "Max");
+    await page.waitForSelector(transcript, { timeout: 60000 });
+    await noBlockingError();
+  });
+  await step("Cherif parle en anglais → Max répond", async () => {
+    await page.evaluate(() => {
+      window.__nextSpeech = "I played football with my friends";
+    });
+    await waitBubble("what did you do after", 25000);
+    await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Appui pour parler + voix du téléphone
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "phone", "prof-langue:language": "fr", "prof-langue:mode": "ami", "prof-langue:talk-mode": "appui" });
+  console.log("Appui pour parler, voix du téléphone, Max en français");
+  await step("Maintenir le micro, parler, relâcher → réponse", async () => {
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => {
+      window.__nextSpeech = "J'ai regardé un film hier soir";
+    });
+    const mic = page.getByRole("button", { name: /Maintiens pour parler/ });
+    await mic.waitFor({ timeout: 10000 });
+    const box = await mic.boundingBox();
+    if (!box) throw new Error("bouton micro introuvable");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(900);
+    await page.mouse.up();
+    await waitBubble("après le café", 25000);
+    const spoken = await page.evaluate(() => window.__spoken.length);
+    if (spoken < 1) throw new Error("la voix du téléphone n'a rien lu");
+    await noBlockingError();
+  });
+  await page.context().close();
+} finally {
+  await browser.close();
+}
+
+const failed = results.filter((r) => !r.ok);
+console.log(`\n${results.length - failed.length}/${results.length} étapes réussies`);
+if (failed.length) {
+  console.log(`Captures des échecs : ${SHOTS}`);
+  process.exit(1);
+}

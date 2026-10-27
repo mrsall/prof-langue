@@ -10,7 +10,9 @@ export const maxDuration = 30;
  * GET  : état actuel (sans rien changer).
  * POST : applique les réglages. Idempotent : refaire n'abîme rien.
  */
-const AGENTS_API = "https://api.elevenlabs.io/v1/convai/agents";
+import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
+
+const AGENTS_API = `${ELEVENLABS_API_BASE}/v1/convai/agents`;
 const TARGET_LLM = process.env.ELEVENLABS_AGENT_LLM || "claude-haiku-5-5";
 const MULTILINGUAL_TTS = process.env.ELEVENLABS_TTS_MODEL || "eleven_flash_v2_5";
 const ENGLISH_ONLY_TTS = new Set(["eleven_turbo_v2", "eleven_flash_v2"]);

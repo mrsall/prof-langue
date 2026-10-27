@@ -111,6 +111,15 @@ Quand tu valides la V3, on passe à la V4 (prononciation, shadowing, suivi des s
 
 ## Pour les développeurs
 
+### Banc de test avant livraison
+
+```
+npx tsc --noEmit && npx eslint src --max-warnings=0
+DATABASE_URL=postgres://... npm run test:e2e        # SKIP_BUILD=1 pour rejouer sans reconstruire
+```
+
+Le banc lance un faux Claude et un faux ElevenLabs (`scripts/test/mock-services.mjs`), construit l'app, puis la pilote dans un navigateur avec un faux micro et une fausse voix (`scripts/test/e2e.mjs`) : séance éco complète, réponse vide de Claude, bilan, prononciation, suivi, carnet, réglages, débat avec juge, repli de voix, appui pour parler, et les routes serveur (séance ElevenLabs, agent, voix, lecture, sujets, bilan, niveau, transcription, phonèmes). Les captures des étapes en échec sont écrites dans `SHOTS_DIR`.
+
 ```bash
 npm install
 cp .env.example .env.local   # puis remplis les valeurs

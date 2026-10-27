@@ -19,7 +19,8 @@ export type EcoMode = "speaking" | "listening" | "thinking" | "idle";
 export type EcoCallbacks = {
   onConnect: () => void;
   onDisconnect: (details: { reason: "user" | "error"; message?: string }) => void;
-  onError: (message: string) => void;
+  /** `fatal` : la séance ne peut pas continuer (sinon simple avertissement, la séance continue). */
+  onError: (message: string, options?: { fatal?: boolean }) => void;
   onMessage: (message: { role: "user" | "agent"; message: string }) => void;
   onModeChange: (details: { mode: EcoMode }) => void;
   onInterim?: (text: string) => void;
@@ -38,6 +39,11 @@ export type EcoOptions = {
   /** Première réplique imposée (reprise) ; sinon le serveur la choisit. */
   firstMessage?: string | null;
   callbacks: EcoCallbacks;
+};
+
+const RETRY_LINES: Record<Language, string> = {
+  en: "Sorry, I missed that. Can you say it again?",
+  fr: "Pardon, je n'ai pas bien suivi. Tu peux redire ça ?",
 };
 
 const SILENCE_MS = 1300;
@@ -160,14 +166,15 @@ export class EcoEngine {
     this.cancelListening();
     this.lastAgentText = text;
     this.history.push({ role: "agent", text });
-    this.options.callbacks.onMessage({ role: "agent", message: text });
+    // Les balises <voice> servent à la voix, pas à l'affichage.
+    this.options.callbacks.onMessage({ role: "agent", message: text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
     this.setMode("speaking");
     const handle = this.options.speaker.speak(text, rate);
     this.speaking = handle;
     try {
       await handle.done;
     } catch (error) {
-      this.options.callbacks.onError(error instanceof Error ? error.message : "Lecture impossible.");
+      this.options.callbacks.onError(error instanceof Error ? error.message : "Lecture impossible.", { fatal: false });
     }
     if (this.speaking !== handle || this.ended) return;
     this.speaking = null;
@@ -183,17 +190,18 @@ export class EcoEngine {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...this.options.body, transcript: history.slice(-40) }),
       });
-      const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string };
+      const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string; fallback?: boolean };
       if (!res.ok || !data.text) {
-        this.options.callbacks.onError(data.error ?? "Le personnage n'a pas pu répondre. Réessaie.");
+        const fatal = res.status === 503 || res.status === 401 || res.status === 400;
+        this.options.callbacks.onError(data.error ?? "Le personnage n'a pas pu répondre.", { fatal });
         this.setMode("idle");
-        return null;
+        return fatal ? null : RETRY_LINES[this.options.language];
       }
       return data.text;
     } catch {
-      this.options.callbacks.onError("Pas de connexion. Vérifie ton réseau puis réessaie.");
+      this.options.callbacks.onError("Pas de connexion. Vérifie ton réseau.", { fatal: false });
       this.setMode("idle");
-      return null;
+      return RETRY_LINES[this.options.language];
     }
   }
 

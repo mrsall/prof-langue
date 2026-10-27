@@ -13,6 +13,12 @@ const DEFAULT_MODEL = "claude-haiku-5-5";
 
 type Body = SessionBody & { transcript?: TranscriptLine[] };
 
+/** Si Claude ne renvoie rien (rare), le personnage relance au lieu de casser la séance. */
+const FALLBACK_LINES: Record<"en" | "fr", string> = {
+  en: "Sorry, I missed that. Can you say it again, a bit slower?",
+  fr: "Pardon, je n'ai pas bien suivi. Tu peux redire ça, un peu plus lentement ?",
+};
+
 const ECO_RULES: Record<"en" | "fr", string> = {
   en: "You are speaking through a phone voice that reads your text aloud. Reply with plain spoken text only: no markdown, no lists, no stage directions, no emojis. One to three short sentences, then a question. Keep any <voice name=\"judge\"> tags exactly as instructed for the debate; never use other tags.",
   fr: "Tu parles à travers une voix de téléphone qui lit ton texte à voix haute. Réponds en texte parlé simple : pas de markdown, pas de liste, pas de didascalie, pas d'émoji. Une à trois phrases courtes, puis une question. Garde les balises <voice name=\"juge\"> exactement comme demandé pour le débat ; aucune autre balise.",
@@ -63,20 +69,28 @@ export async function POST(request: Request) {
     .join("\n\n");
 
   const client = new Anthropic();
-  try {
-    const response = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-      max_tokens: 260,
-      system,
-      messages,
-    });
-    const text = response.content
+  const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+  const cleanText = (response: Anthropic.Message) =>
+    response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)
       .join("")
       .replace(/\*\*|__|#+\s?/g, "")
       .trim();
-    if (!text) return Response.json({ error: "Réponse vide." }, { status: 502 });
+  try {
+    const response = await client.messages.create({ model, max_tokens: 260, system, messages });
+    let text = cleanText(response);
+    if (!text) {
+      // Réponse sans texte : on redemande une fois en insistant, puis on relance Cherif nous-mêmes.
+      console.error("Mode éco : réponse vide", { stop_reason: response.stop_reason, blocks: response.content.map((b) => b.type) });
+      const nudge: Anthropic.MessageParam = {
+        role: "user",
+        content: `${messages.at(-1)?.content as string}\n\n(${prepared.language === "en" ? "Answer in one or two spoken sentences, then ask a question." : "Réponds en une ou deux phrases parlées, puis pose une question."})`,
+      };
+      const retry = await client.messages.create({ model, max_tokens: 260, system, messages: [...messages.slice(0, -1), nudge] });
+      text = cleanText(retry);
+      if (!text) return Response.json({ text: FALLBACK_LINES[prepared.language], fallback: true, reason: `vide (${response.stop_reason ?? "?"})` });
+    }
     return Response.json({ text });
   } catch (error) {
     const detail = error instanceof Anthropic.APIError ? `${error.status} ${error.message}` : error instanceof Error ? error.message : String(error);

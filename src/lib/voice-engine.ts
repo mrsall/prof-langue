@@ -172,6 +172,7 @@ function elevenSpeaker(language: Language, personalityId: string | null): Speake
           );
         } catch (error) {
           // ElevenLabs injoignable : la voix du téléphone prend le relais pour cette réplique.
+          console.warn("Voix ElevenLabs indisponible, repli sur la voix du téléphone :", error instanceof Error ? error.message : error);
           if (!fallback || cancelled) throw error;
           inner = fallback.speak(text, rate);
           await inner.done;
