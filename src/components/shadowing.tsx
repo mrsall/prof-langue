@@ -217,7 +217,15 @@ export function Shadowing() {
       return;
     }
     const audio = getAudio();
-    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof&engine=${voiceChoice === "gemini" ? "gemini" : "eleven"}`;
+    const gemini = voiceChoice === "gemini";
+    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof&engine=${gemini ? "gemini" : "eleven"}`;
+    // La voix Google arrive à vitesse normale : « Lentement » se fait à la lecture, sans changer la hauteur de la voix.
+    audio.playbackRate = gemini ? Math.max(0.7, Math.min(1.2, speed)) : 1;
+    try {
+      (audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
+    } catch {
+      // navigateur sans réglage
+    }
     audio.onended = () => setPhase((s) => (s === "playing" ? "idle" : s));
     audio.onerror = () => {
       // La voix naturelle n'a pas pu être chargée : on lit avec la voix du téléphone.

@@ -45,22 +45,21 @@ function score(name: string) {
   return s;
 }
 
-const STYLE: Record<Language, (speed: number) => string> = {
-  fr: (speed) => (speed < 0.9 ? "Lis ceci lentement et très clairement, comme un professeur patient : " : speed > 1.05 ? "Lis ceci d'un ton vif et naturel : " : "Lis ceci d'un ton naturel, comme dans une vraie conversation : "),
-  en: (speed) => (speed < 0.9 ? "Read this slowly and very clearly, like a patient teacher: " : speed > 1.05 ? "Read this in a lively, natural tone: " : "Read this in a natural, conversational tone: "),
-};
-
-/** Fabrique un WAV 24 kHz à partir du texte. */
-export async function geminiSpeak(options: { text: string; voice: string; language: Language; speed?: number }): Promise<{ wav: Buffer; model: string }> {
+/**
+ * Fabrique un WAV 24 kHz à partir du texte.
+ * On envoie le texte seul, sans consigne de style : le modèle lisait parfois
+ * la consigne à voix haute (« Lis ceci lentement… ») avant la phrase. La
+ * vitesse se règle côté téléphone, à la lecture (hauteur de voix conservée).
+ */
+export async function geminiSpeak(options: { text: string; voice: string; language: Language }): Promise<{ wav: Buffer; model: string }> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new Error("GEMINI_API_KEY manquante.");
   const model = await geminiTtsModel(apiKey);
-  const prompt = `${STYLE[options.language](options.speed ?? 1)}${options.text}`;
   const res = await fetch(`${API_BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts: [{ text: options.text }] }],
       generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: options.voice } } } },
     }),
   });
@@ -70,11 +69,38 @@ export async function geminiSpeak(options: { text: string; voice: string; langua
     throw new Error(`Google a répondu ${res.status}${detail ? ` : ${detail}` : ""}.`);
   }
   const data = (await res.json()) as { candidates?: { content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[] };
-  const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
-  if (!part?.inlineData?.data) throw new Error("Google n'a pas renvoyé d'audio.");
-  const rate = Number(part.inlineData.mimeType?.match(/rate=(\d+)/)?.[1] ?? 24000) || 24000;
-  const pcm = Buffer.from(part.inlineData.data, "base64");
+  // L'audio peut arriver en plusieurs morceaux : on les recolle tous, dans l'ordre.
+  const parts = (data.candidates?.[0]?.content?.parts ?? []).filter((p) => p.inlineData?.data);
+  if (parts.length === 0) throw new Error("Google n'a pas renvoyé d'audio.");
+  const rate = Number(parts[0].inlineData?.mimeType?.match(/rate=(\d+)/)?.[1] ?? 24000) || 24000;
+  const pcm = tidyPcm(Buffer.concat(parts.map((p) => Buffer.from(p.inlineData!.data!, "base64"))), rate);
   return { wav: pcmToWav(pcm, rate), model };
+}
+
+/**
+ * Nettoie le son brut (16 bits mono) : octet orphelin retiré, queue de silence
+ * (ou de parasites très faibles) coupée, fondu de 20 ms au début et à la fin
+ * pour éviter le « clic » quand le lecteur démarre ou s'arrête net.
+ */
+export function tidyPcm(raw: Buffer, sampleRate: number) {
+  let pcm = raw.length % 2 === 1 ? raw.subarray(0, raw.length - 1) : raw;
+  const samples = pcm.length / 2;
+  if (samples < sampleRate / 10) return pcm;
+  // Fin : on garde 120 ms après le dernier échantillon audible.
+  const threshold = 300;
+  let last = samples - 1;
+  while (last > 0 && Math.abs(pcm.readInt16LE(last * 2)) < threshold) last--;
+  const keep = Math.min(samples, last + 1 + Math.round(sampleRate * 0.12));
+  pcm = Buffer.from(pcm.subarray(0, keep * 2));
+  const total = pcm.length / 2;
+  const fade = Math.min(Math.round(sampleRate * 0.02), Math.floor(total / 2));
+  for (let i = 0; i < fade; i++) {
+    const gain = i / fade;
+    pcm.writeInt16LE(Math.round(pcm.readInt16LE(i * 2) * gain), i * 2);
+    const j = total - 1 - i;
+    pcm.writeInt16LE(Math.round(pcm.readInt16LE(j * 2) * gain), j * 2);
+  }
+  return pcm;
 }
 
 function pcmToWav(pcm: Buffer, sampleRate: number) {

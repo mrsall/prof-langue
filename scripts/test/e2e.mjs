@@ -277,7 +277,12 @@ try {
       window.__nextSpeech = "LONG j'ai regardé le match";
     });
     await waitBubble("comment ça s'est passé chez toi", 25000);
-    const stats = await mockStats();
+    // La bulle s'affiche avant que les morceaux audio soient tous demandés : on laisse quelques secondes.
+    let stats = await mockStats();
+    for (let i = 0; i < 20 && !(stats.tts >= 2); i++) {
+      await page.waitForTimeout(250);
+      stats = await mockStats();
+    }
     if (!(stats.tts >= 2)) throw new Error(`la réplique longue n'a pas été coupée en morceaux (appels tts : ${stats.tts ?? 0})`);
     if (fallbackWarnings.length) throw new Error(fallbackWarnings[0]);
     await noBlockingError();
