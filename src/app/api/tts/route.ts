@@ -27,7 +27,8 @@ export async function GET(request: Request) {
     if (!geminiAvailable()) return Response.json({ error: "Voix Google non configurée : ajoute GEMINI_API_KEY dans Vercel (clé gratuite sur aistudio.google.com)." }, { status: 503 });
     try {
       const role = url.searchParams.get("role") === "judge" ? "judge" : "main";
-      const { wav } = await geminiSpeak({ text, language, voice: geminiVoiceFor(url.searchParams.get("personality"), language, role), speed: Number(url.searchParams.get("speed") ?? "1") || 1 });
+      // Pas de vitesse côté Google : le téléphone règle la vitesse à la lecture (sinon le modèle lit la consigne à voix haute).
+      const { wav } = await geminiSpeak({ text, language, voice: geminiVoiceFor(url.searchParams.get("personality"), language, role) });
       return new Response(new Uint8Array(wav), { headers: { "Content-Type": "audio/wav", "Cache-Control": "private, max-age=86400", "Content-Length": String(wav.length) } });
     } catch (error) {
       return Response.json({ error: error instanceof Error ? error.message : "Voix Google indisponible." }, { status: 502 });

@@ -226,7 +226,8 @@ function serverSpeaker(engine: "eleven" | "gemini", language: Language, personal
           urls.forEach((u) => URL.revokeObjectURL(u));
           return;
         }
-        inner = playUrls(urls, 1);
+        // ElevenLabs applique déjà la vitesse ; la voix Google est lue à vitesse réglée par le lecteur (hauteur conservée).
+        inner = playUrls(urls, engine === "gemini" ? clampRate(rate, 0.7, 1.2) : 1);
         try {
           await inner.done;
         } finally {
