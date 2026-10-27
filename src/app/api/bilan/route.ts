@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { askClaude } from "@/lib/claude";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 
 export const maxDuration = 30;
@@ -34,7 +35,6 @@ export type BilanResult = {
   teacherFocus: string | null;
 };
 
-const DEFAULT_MODEL = "claude-haiku-5-5";
 
 function emptyBilan(available: boolean): BilanResult {
   return { available, words: [], errors: [], corrections: [], upgrades: [], debate: null, encouragement: null, suggestTeacher: false, teacherFocus: null };
@@ -155,9 +155,10 @@ export async function POST(request: Request) {
 
   const client = new Anthropic();
   try {
-    const response = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-      max_tokens: 1500,
+    const response = await askClaude(client, {
+      maxTokens: 4096,
+      effort: "low",
+      thinking: "adaptive",
       system: systemPrompt(language, name, personality.recapHint?.[language]),
       messages: [
         {
@@ -166,14 +167,11 @@ export async function POST(request: Request) {
         },
       ],
     });
-    if (response.stop_reason === "refusal") {
+    if (response.stopReason === "refusal") {
       return Response.json(emptyBilan(true));
     }
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-    return Response.json(parseResult(text));
+    if (response.truncated) console.warn("Bilan : réponse coupée par le plafond de sortie");
+    return Response.json(parseResult(response.text));
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError) {
       console.error("Bilan : clé Anthropic refusée");

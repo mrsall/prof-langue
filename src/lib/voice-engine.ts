@@ -87,20 +87,35 @@ export function unlockAudio() {
   } catch {
     // pas de lecteur audio
   }
+  // Même règle pour la voix de synthèse sur iPhone : une première lecture dans le geste.
+  try {
+    if (speechSynthesisAvailable()) {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    }
+  } catch {
+    // pas de voix
+  }
 }
+
+/** Numéro de la lecture en cours : une lecture annulée ne touche plus au lecteur partagé. */
+let playerGeneration = 0;
 
 /** Joue des fichiers à la suite ; `cancel` arrête net. */
 function playUrls(urls: string[], rate = 1): SpeakHandle {
   const a = getPlayer();
+  const generation = ++playerGeneration;
   let cancelled = false;
   let release: (() => void) | null = null;
+  const stale = () => cancelled || generation !== playerGeneration;
   const done = (async () => {
     for (const url of urls) {
-      if (cancelled) return;
+      if (stale()) return;
       await new Promise<void>((resolve, reject) => {
         release = resolve;
         a.onended = () => resolve();
-        a.onerror = () => reject(new Error("Lecture audio impossible."));
+        a.onerror = () => (stale() ? resolve() : reject(new Error("Lecture audio impossible.")));
         a.src = url;
         a.playbackRate = rate;
         try {
@@ -108,12 +123,15 @@ function playUrls(urls: string[], rate = 1): SpeakHandle {
         } catch {
           // navigateur sans réglage
         }
-        a.play().catch(reject);
+        // Une lecture interrompue (pause, nouvelle source) rejette avec AbortError : ce n'est pas une panne.
+        a.play().catch((error) => (stale() ? resolve() : reject(error)));
       });
     }
   })().finally(() => {
-    a.onended = null;
-    a.onerror = null;
+    if (generation === playerGeneration) {
+      a.onended = null;
+      a.onerror = null;
+    }
     release = null;
   });
   return {
@@ -128,6 +146,22 @@ function playUrls(urls: string[], rate = 1): SpeakHandle {
 
 function clampRate(rate: number, min: number, max: number) {
   return Math.max(min, Math.min(max, rate));
+}
+
+/** Regroupe les phrases d'un segment en morceaux courts : une requête /api/tts chacun, rien n'est coupé. */
+export function chunkForTts(text: string, max = 260): string[] {
+  const out: string[] = [];
+  let current = "";
+  for (const sentence of splitSentences(text)) {
+    if (current && current.length + sentence.length + 1 > max) {
+      out.push(current);
+      current = sentence;
+    } else {
+      current = current ? `${current} ${sentence}` : sentence;
+    }
+  }
+  if (current) out.push(current);
+  return out.length > 0 ? out : [text.trim()].filter(Boolean);
 }
 
 // ---- haut-parleurs ----
@@ -149,7 +183,8 @@ function serverSpeaker(engine: "eleven" | "gemini", language: Language, personal
     choice: engine,
     preload: async () => undefined,
     speak: (text, rate) => {
-      const segments = splitVoiceSegments(text);
+      // Une réplique longue part en plusieurs morceaux (le serveur coupe au-delà de 600 caractères).
+      const segments = splitVoiceSegments(text).flatMap((seg) => chunkForTts(seg.text).map((part) => ({ text: part, alt: seg.alt })));
       let cancelled = false;
       let inner: SpeakHandle | null = null;
       const done = (async () => {

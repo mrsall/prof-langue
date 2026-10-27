@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { askClaude } from "@/lib/claude";
 import { connection } from "next/server";
 import { isLanguage, type Language } from "@/config/personalities";
 import { db, dbAvailable, withTimeout } from "@/lib/db";
@@ -27,7 +28,6 @@ export type PronunciationStatus = { available: boolean; engine: "azure" | "text"
 export type PronunciationTip = { word: string; heard: string | null; sound: string; tip: string };
 export type PronunciationResponse = PronunciationResult & { engine: PronunciationEngine; tips: PronunciationTip[] };
 
-const DEFAULT_MODEL = "claude-haiku-5-5";
 
 export async function GET() {
   await connection();
@@ -104,17 +104,14 @@ async function explainMistakes(words: AlignedWord[], language: Language, referen
   const client = new Anthropic();
   const target = language === "en" ? "anglais (accent britannique)" : "français (accent de France)";
   const list = failed.map((w) => `- mot attendu : « ${w.word} » ; entendu : ${w.heard ? `« ${w.heard} »` : "rien (mot oublié)"}`).join("\n");
-  const response = await client.messages.create({
-    model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-    max_tokens: 400,
+  const response = await askClaude(client, {
+    maxTokens: 1024,
+    effort: "low",
+    thinking: "disabled",
     system: `Tu es coach de prononciation pour Cherif, francophone du Sénégal (Dakar), qui apprend le ${target}. La reconnaissance vocale a mal compris certains mots qu'il a répétés. Pour chaque mot, devine le son le plus probablement raté (en tenant compte des habitudes des francophones d'Afrique de l'Ouest : th → s/z, h muet, r, voyelles longues/courtes, consonnes finales, accent tonique) et donne UN conseil concret en français de 20 mots maximum sur la bouche, la langue ou le rythme, en comparant à un son du français ou du wolof si utile. Réponds UNIQUEMENT en JSON : [{"word":"...","sound":"étiquette courte du son, ex. th, h, r, i court, -ed final","tip":"..."}]`,
     messages: [{ role: "user", content: `Phrase modèle : « ${reference} »\n${list}` }],
   });
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-  const match = text.match(/\[[\s\S]*\]/);
+  const match = response.text.match(/\[[\s\S]*\]/);
   if (!match) return [];
   const parsed = JSON.parse(match[0]) as { word?: unknown; sound?: unknown; tip?: unknown }[];
   return parsed

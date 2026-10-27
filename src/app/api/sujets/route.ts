@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { askClaude } from "@/lib/claude";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 import { fallbackTopics, TOPICS } from "@/config/topics";
 
@@ -10,7 +11,6 @@ export const maxDuration = 30;
  */
 type Body = { personality?: string; language?: string; recent?: string[] };
 
-const DEFAULT_MODEL = "claude-haiku-5-5";
 
 function parseTopics(text: string): string[] {
   const start = text.indexOf("[");
@@ -45,9 +45,10 @@ export async function POST(request: Request) {
   const examples = TOPICS[personality.id]?.[language] ?? [];
   const client = new Anthropic();
   try {
-    const response = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-      max_tokens: 400,
+    const response = await askClaude(client, {
+      maxTokens: 1024,
+      effort: "low",
+      thinking: "disabled",
       system: `You suggest conversation topics for a language-learning app. The learner is Cherif, a French speaker from Senegal who runs a banana farming business, likes tech, anime, video games, football, movies, and has a YouTube channel. Return ONLY a JSON array of 4 short topic titles (max 8 words each), in ${language === "en" ? "English" : "French"}, no prose.`,
       messages: [
         {
@@ -60,11 +61,7 @@ Give 4 fresh, concrete topics adapted to this mode and to a beginner-to-intermed
         },
       ],
     });
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-    const topics = parseTopics(text);
+    const topics = parseTopics(response.text);
     if (topics.length >= 3) return Response.json({ topics, generated: true });
     return Response.json({ topics: fallback, generated: false });
   } catch (error) {

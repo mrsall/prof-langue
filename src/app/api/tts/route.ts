@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   }
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) return Response.json({ error: "ELEVENLABS_API_KEY manquante." }, { status: 503 });
-  const text = (url.searchParams.get("text") ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const text = (url.searchParams.get("text") ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
   const lang = url.searchParams.get("lang") ?? "en";
   const language = isLanguage(lang) ? lang : "en";
   const speed = Math.min(1.2, Math.max(0.7, Number(url.searchParams.get("speed") ?? "1") || 1));
