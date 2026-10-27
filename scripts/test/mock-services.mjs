@@ -9,6 +9,9 @@ import http from "node:http";
 
 const PORT = Number(process.env.MOCK_PORT || 4545);
 const log = (...args) => console.log("[mock]", ...args);
+/** Compteur d'appels par chemin, lisible sur GET /__stats (remis à zéro par POST /__reset). */
+const stats = {};
+const count = (key) => (stats[key] = (stats[key] ?? 0) + 1);
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -93,6 +96,7 @@ function claudeAnswer(body) {
   }
   // Réplique du mode éco.
   if (/VIDE/.test(user)) return null; // simule une réponse sans texte
+  if (/LONG/.test(user)) return french ? "Ah, le match d'hier, quelle soirée ! Moi, j'ai regardé la deuxième mi-temps avec mon cousin et on a crié comme des fous sur le but de la fin. Le gardien a fait un arrêt incroyable juste avant, tu as vu ça ? Franchement, je pensais que c'était fini pour eux à la mi-temps. Et toi, tu as regardé le match tout seul ou avec des amis ? Raconte-moi comment ça s'est passé chez toi." : "Oh, yesterday's match, what a night! I watched the second half with my cousin and we screamed like crazy at that last goal. The keeper made an incredible save just before it, did you see that? Honestly, I thought they were done at half time. And you, did you watch the match alone or with friends? Tell me how it went at your place."; // réplique longue (> 300 caractères)
   const debate = /debatteur|Leo/.test(system) && /<voice name=/.test(system);
   if (debate) {
     return french
@@ -110,6 +114,12 @@ const server = http.createServer(async (req, res) => {
   const path = url.pathname;
   const raw = await readBody(req);
   log(req.method, path);
+  count(path.startsWith("/v1/text-to-speech/") ? "tts" : path.startsWith("/v1beta/models/") ? "gemini" : path);
+  if (req.method === "GET" && path === "/__stats") return json(res, 200, stats);
+  if (req.method === "POST" && path === "/__reset") {
+    for (const k of Object.keys(stats)) delete stats[k];
+    return json(res, 200, { ok: true });
+  }
 
   // ---- Anthropic
   if (req.method === "POST" && path === "/v1/messages") {
@@ -119,6 +129,18 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return json(res, 400, { type: "error", error: { type: "invalid_request_error", message: "bad json" } });
     }
+    const maxTokens = Number(body.max_tokens ?? 0);
+    const thinkingOff = body.thinking?.type === "disabled";
+    if (!thinkingOff && maxTokens < 600) {
+      // Comme le vrai Haiku 5.5 : la réflexion consomme un petit plafond et aucun texte ne sort.
+      return json(res, 200, { id: "msg_mock", type: "message", role: "assistant", model: body.model ?? "mock", content: [{ type: "thinking", thinking: "Je réfléchis longuement…", signature: "" }], stop_reason: "max_tokens", stop_sequence: null, usage: { input_tokens: 10, output_tokens: maxTokens } });
+    }
+    if (body.thinking?.type === "disabled" && /opus|sonnet/.test(String(body.model))) {
+      // Ces modèles refusent de couper la réflexion : l'app doit réessayer sans ce réglage.
+      return json(res, 400, { type: "error", error: { type: "invalid_request_error", message: "thinking.type: disabled is not supported for this model" } });
+    }
+    const user = lastUserText(body.messages ?? []);
+    if (/LENT/.test(user)) await new Promise((r) => setTimeout(r, 1500)); // Claude lent : l'appui pendant la réflexion doit être refusé proprement
     const text = claudeAnswer(body);
     return json(res, 200, {
       id: "msg_mock",

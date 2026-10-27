@@ -16,6 +16,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_PATH || "playwright");
 
 const BASE = (process.env.BASE_URL || "http://localhost:3300").replace(/\/+$/, "");
 const SHOTS = process.env.SHOTS_DIR || "/tmp/claude-0/e2e-shots";
+const MOCK = `http://localhost:${process.env.MOCK_PORT || 4545}`;
 mkdirSync(SHOTS, { recursive: true });
 
 const results = [];
@@ -140,6 +141,16 @@ async function waitBubble(text, timeout = 20000) {
   );
 }
 
+async function countBubbles(text) {
+  const all = await page.locator(transcript).allTextContents();
+  return all.filter((t) => t.toLowerCase().includes(text.toLowerCase())).length;
+}
+
+async function mockStats(reset = false) {
+  if (reset) await page.request.post(`${MOCK}/__reset`);
+  return (await page.request.get(`${MOCK}/__stats`)).json();
+}
+
 async function noBlockingError() {
   const retry = await page.locator("button", { hasText: "Réessayer" }).count();
   if (retry > 0) {
@@ -194,10 +205,15 @@ try {
     const diag = await (await page.request.get(`${BASE}/api/diagnostic/gemini`)).json();
     if (!diag.ok || !/tts/.test(diag.model ?? "")) throw new Error(JSON.stringify(diag).slice(0, 200));
   });
-  await step("Diagnostic Claude : réponse avec du texte", async () => {
+  await step("Diagnostic Claude : réponse avec du texte (le faux Claude rend une réponse vide si le plafond est trop bas)", async () => {
     const res = await page.request.get(`${BASE}/api/diagnostic/claude`);
     const data = await res.json();
-    if (!data.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+    if (!data.ok || data.stopReason !== "end_turn") throw new Error(JSON.stringify(data).slice(0, 200));
+  });
+  await step("Réplique éco directe (/api/eco/reply) : texte présent, sans repli", async () => {
+    const res = await page.request.post(`${BASE}/api/eco/reply`, { data: { personality: "ami", language: "fr", correction: "legere", speed: "normal", topic: "Ta journée", ownTopic: false, kind: "conversation", transcript: [{ role: "agent", text: "Salut Cherif !" }, { role: "user", text: "hier j'ai bu mon café" }] } });
+    const data = await res.json();
+    if (!res.ok() || !data.text || data.fallback) throw new Error(JSON.stringify(data).slice(0, 200));
   });
   await step("Sujets, bilan et niveau : JSON de Claude bien lu", async () => {
     const sujets = await (await page.request.post(`${BASE}/api/sujets`, { data: { personality: "ami", language: "en", recent: [] } })).json();
@@ -253,6 +269,17 @@ try {
   await step("Répète relit la dernière réplique", async () => {
     await page.getByRole("button", { name: /Répète/ }).click();
     await page.waitForTimeout(800);
+    await noBlockingError();
+  });
+  await step("Réplique longue (> 300 caractères) : affichée entière et lue en plusieurs morceaux ElevenLabs", async () => {
+    await mockStats(true);
+    await page.evaluate(() => {
+      window.__nextSpeech = "LONG j'ai regardé le match";
+    });
+    await waitBubble("comment ça s'est passé chez toi", 25000);
+    const stats = await mockStats();
+    if (!(stats.tts >= 2)) throw new Error(`la réplique longue n'a pas été coupée en morceaux (appels tts : ${stats.tts ?? 0})`);
+    if (fallbackWarnings.length) throw new Error(fallbackWarnings[0]);
     await noBlockingError();
   });
   await step("Changer la vitesse relance la séance avec une phrase de reprise", async () => {
@@ -402,6 +429,28 @@ try {
     await waitBubble("après le café", 25000);
     const spoken = await page.evaluate(() => window.__spoken.length);
     if (spoken < 1) throw new Error("la voix du téléphone n'a rien lu");
+    await noBlockingError();
+  });
+  await step("Appui pendant que Max réfléchit → avertissement, aucune deuxième prise", async () => {
+    const before = await countBubbles("après le café");
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => {
+      window.__nextSpeech = "LENT j'ai aussi mangé du riz";
+    });
+    const mic = page.getByRole("button", { name: /Maintiens pour parler/ });
+    const box = await mic.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(900);
+    await page.mouse.up();
+    await waitBubble("mangé du riz", 10000);
+    // Claude (simulé) met 1,5 s : un nouvel appui pendant ce temps doit être refusé avec un message.
+    await page.mouse.down();
+    await page.getByText(/prépare sa réponse/).waitFor({ timeout: 3000 });
+    await page.mouse.up();
+    await page.waitForFunction(([sel, t, n]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length > n, [transcript, "après le café", before], { timeout: 20000 });
+    const users = await countBubbles("mangé du riz");
+    if (users !== 1) throw new Error(`prise de parole comptée ${users} fois`);
     await noBlockingError();
   });
   await page.context().close();

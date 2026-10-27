@@ -638,11 +638,16 @@ function AppInner() {
   const onHoldChange = useCallback(
     (next: boolean) => {
       if (!connected && next) return;
+      const eco = ecoRef.current;
+      if (eco && !eco.pushToTalk(next)) {
+        // Le personnage prépare sa réponse : l'appui ne lance pas d'écoute, on le dit.
+        if (next) showToast("Attends une seconde : le personnage prépare sa réponse.");
+        return;
+      }
       setHolding(next);
-      ecoRef.current?.pushToTalk(next);
       navigator.vibrate?.(next ? 30 : 20);
     },
-    [connected],
+    [connected, showToast],
   );
 
   const repeat = useCallback(() => {

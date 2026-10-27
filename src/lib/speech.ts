@@ -46,7 +46,7 @@ export function speechSynthesisAvailable() {
   return typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
 }
 
-export type RecognizeOutcome = { text: string; durationMs: number | null; confidence: number | null; error?: string };
+export type RecognizeOutcome = { text: string; durationMs: number | null; confidence: number | null; error?: string; /** Code brut du téléphone (not-allowed, network…) ou de l'app (unavailable, start-failed). */ errorCode?: string };
 
 export type RecognizeHandle = {
   /** Termine l'écoute et renvoie ce qui a été compris. */
@@ -108,7 +108,7 @@ export function mergeTranscripts(pieces: string[]): string {
 export function recognizeOnce(options: { lang: string; onInterim?: (text: string) => void; maxMs?: number; endSilenceMs?: number | null; noSpeechMs?: number }): RecognizeHandle {
   const Ctor = getSpeechRecognitionCtor();
   if (!Ctor) {
-    return { stop: () => undefined, abort: () => undefined, done: Promise.resolve({ text: "", durationMs: null, confidence: null, error: "Pas de reconnaissance vocale sur ce téléphone." }) };
+    return { stop: () => undefined, abort: () => undefined, done: Promise.resolve({ text: "", durationMs: null, confidence: null, error: "Pas de reconnaissance vocale sur ce téléphone.", errorCode: "unavailable" }) };
   }
   const endSilenceMs = options.endSilenceMs === undefined ? 1800 : options.endSilenceMs;
   const noSpeechMs = options.noSpeechMs ?? 9000;
@@ -127,12 +127,15 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
   let speechStart: number | null = null;
   let lastActivity: number | null = null;
   let errorMessage: string | undefined;
+  let errorCode: string | undefined;
   let settled = false;
   let wantStop = false;
   let running = false;
   const startedAt = performance.now();
   let maxTimer: ReturnType<typeof setTimeout> | null = null;
   let ticker: ReturnType<typeof setInterval> | null = null;
+  let stopGuard: ReturnType<typeof setTimeout> | null = null;
+  let finish: () => void = () => undefined;
 
   const currentText = () => mergeTranscripts([...finals, interimText]);
   const requestStop = () => {
@@ -142,17 +145,20 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
     } catch {
       // déjà arrêté
     }
+    // Certains téléphones n'envoient jamais `onend` après stop() : on termine quand même.
+    if (!stopGuard) stopGuard = setTimeout(() => finish(), 1500);
   };
 
   const done = new Promise<RecognizeOutcome>((resolve) => {
-    const finish = () => {
+    finish = () => {
       if (settled) return;
       settled = true;
       if (maxTimer) clearTimeout(maxTimer);
       if (ticker) clearInterval(ticker);
+      if (stopGuard) clearTimeout(stopGuard);
       const text = currentText();
       const durationMs = speechStart !== null && lastActivity !== null ? Math.max(0, Math.round(lastActivity - speechStart)) : null;
-      resolve({ text, durationMs, confidence, error: errorMessage });
+      resolve({ text, durationMs, confidence, error: errorMessage, errorCode });
     };
     const launch = () => {
       try {
@@ -175,7 +181,7 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
       if (speechStart === null) speechStart = now;
       // On relit toute la liste : certains téléphones renvoient tout depuis le début.
       const finalPieces: string[] = [];
-      let interim = "";
+      const interimPieces: string[] = [];
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
         const alt = result[0];
@@ -184,19 +190,21 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
           finalPieces.push(alt.transcript);
           if (typeof alt.confidence === "number" && alt.confidence > 0) confidence = alt.confidence;
         } else {
-          interim += ` ${alt.transcript}`;
+          interimPieces.push(alt.transcript);
         }
       }
       // Les finaux de cette prise remplacent ceux de la même prise (pas ceux des prises précédentes).
       finals.splice(takeIndex);
       finals.push(...finalPieces);
-      interimText = interim.trim();
+      // Les provisoires aussi sont souvent cumulés (« salut », « salut je »…) : jamais mis bout à bout.
+      interimText = mergeTranscripts(interimPieces);
       if (currentText() !== lastText) lastActivity = now;
       lastText = currentText();
       options.onInterim?.(lastText);
     };
     rec.onerror = (event) => {
       if (event.error === "no-speech" || event.error === "aborted") return;
+      errorCode = event.error;
       errorMessage = ERROR_MESSAGES[event.error] ?? `Reconnaissance vocale : ${event.error}`;
     };
     rec.onend = () => {
@@ -224,6 +232,7 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
     }, 150);
     maxTimer = setTimeout(requestStop, maxMs);
     if (!launch()) {
+      errorCode = "start-failed";
       errorMessage = "Impossible de démarrer l'écoute.";
       finish();
     }
@@ -240,6 +249,7 @@ export function recognizeOnce(options: { lang: string; onInterim?: (text: string
       } catch {
         // déjà arrêté
       }
+      finish();
     },
     done,
   };
@@ -330,13 +340,19 @@ export function speakText(text: string, options: { language: Language; rate?: nu
         u.rate = rate;
         u.pitch = segment.alt ? 0.9 : 1;
         let finished = false;
+        let guard: ReturnType<typeof setTimeout> | null = null;
         const end = () => {
           if (finished) return;
           finished = true;
-          clearTimeout(guard);
+          if (guard) clearTimeout(guard);
           resolve();
         };
-        const guard = setTimeout(end, 4000 + segment.text.length * 120);
+        // Garde-fou si `onend` n'arrive jamais ; tant que le téléphone parle encore, on attend (90 s au plus).
+        const startedAt = performance.now();
+        const arm = (ms: number) => {
+          guard = setTimeout(() => (synth.speaking && !cancelled && performance.now() - startedAt < 90000 ? arm(1000) : end()), ms);
+        };
+        arm(4000 + segment.text.length * 120);
         u.onstart = () => {
           if (!started) {
             started = true;

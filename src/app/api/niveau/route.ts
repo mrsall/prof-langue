@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { askClaude } from "@/lib/claude";
 import { isLanguage, type Language } from "@/config/personalities";
 import { LEVELS, saveLevel, type LevelInfo } from "@/lib/settings";
 import { dbAvailable } from "@/lib/db";
@@ -12,7 +13,6 @@ export const maxDuration = 30;
  */
 type Body = { transcript?: { role: "user" | "agent"; text: string }[]; language?: string };
 
-const DEFAULT_MODEL = "claude-haiku-5-5";
 
 export async function POST(request: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -34,9 +34,10 @@ export async function POST(request: Request) {
   const lines = transcript.slice(-80).map((l) => `${l.role === "user" ? "Cherif" : "Emma"}: ${l.text.trim().slice(0, 400)}`).join("\n");
   const client = new Anthropic();
   try {
-    const response = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-      max_tokens: 800,
+    const response = await askClaude(client, {
+      maxTokens: 2048,
+      effort: "low",
+      thinking: "adaptive",
       system: `You are a CEFR examiner for spoken ${target}. You receive the transcript (speech-to-text, so ignore punctuation and small transcription glitches) of a short placement chat between Cherif, a French speaker from Senegal, and Emma, his teacher. Judge ONLY Cherif's lines: range of vocabulary, grammar control, ability to narrate, give opinions, handle hypotheticals, and length of his turns.
 Return ONLY a JSON object: {"level":"A1|A2|B1|B2|C1|C2","summary":"...","strengths":["..."],"toWorkOn":["..."]}
 - "summary": two short sentences in French, encouraging and concrete.
@@ -44,11 +45,8 @@ Return ONLY a JSON object: {"level":"A1|A2|B1|B2|C1|C2","summary":"...","strengt
 - "toWorkOn": 2 or 3 short items in French (grammar points or skills), never about accent.`,
       messages: [{ role: "user", content: lines }],
     });
-    if (response.stop_reason === "refusal") throw new Error("refusal");
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
+    if (response.stopReason === "refusal") throw new Error("refusal");
+    const text = response.text;
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
     const parsed = JSON.parse(text.slice(start, end + 1)) as Partial<LevelInfo>;

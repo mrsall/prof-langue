@@ -1,16 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { prepareSession, type SessionBody } from "@/lib/session-prompt";
 import type { TranscriptLine } from "@/lib/prompt";
+import { askClaude, claudeErrorDetail } from "@/lib/claude";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 /**
  * Mode éco : une réplique du personnage, calculée par Claude avec exactement
  * les mêmes consignes que la séance ElevenLabs. Le téléphone fait l'oreille
  * et la voix. Sans message de Cherif : renvoie la première réplique.
  */
-const DEFAULT_MODEL = "claude-haiku-5-5";
-
 type Body = SessionBody & { transcript?: TranscriptLine[] };
 
 /** Si Claude ne renvoie rien (rare), le personnage relance au lieu de casser la séance. */
@@ -69,44 +68,26 @@ export async function POST(request: Request) {
     .join("\n\n");
 
   const client = new Anthropic();
-  const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
-  const cleanText = (response: Anthropic.Message) =>
-    response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .replace(/\*\*|__|#+\s?/g, "")
-      .trim();
+  const tidy = (t: string) => t.replace(/\*\*|__|#+\s?/g, "").trim();
   try {
-    const response = await client.messages.create({ model, max_tokens: 260, system, messages });
-    let text = cleanText(response);
-    if (!text) {
-      // Réponse sans texte : on redemande une fois en insistant, puis on relance Cherif nous-mêmes.
-      console.error("Mode éco : réponse vide", { stop_reason: response.stop_reason, blocks: response.content.map((b) => b.type) });
-      const nudge: Anthropic.MessageParam = {
-        role: "user",
-        content: `${messages.at(-1)?.content as string}\n\n(${prepared.language === "en" ? "Answer in one or two spoken sentences, then ask a question." : "Réponds en une ou deux phrases parlées, puis pose une question."})`,
-      };
-      const retry = await client.messages.create({ model, max_tokens: 400, system, messages: [...messages.slice(0, -1), nudge] });
-      text = cleanText(retry);
-      if (!text) {
-        // Dernier essai avec une consigne minimale : si ça marche, le problème vient des consignes longues.
-        const simple = await client.messages.create({
-          model,
-          max_tokens: 400,
-          system: prepared.language === "en" ? `You are ${prepared.personality.name}, a friendly English conversation partner. Reply in one or two spoken sentences, then ask a question.` : `Tu es ${prepared.personality.name}, partenaire de conversation en français. Réponds en une ou deux phrases parlées, puis pose une question.`,
-          messages,
-        });
-        text = cleanText(simple);
-        const detail = `réponse vide : arrêt ${response.stop_reason ?? "?"}, blocs ${response.content.map((b) => b.type).join("+") || "aucun"}, modèle ${response.model}`;
-        if (!text) return Response.json({ text: FALLBACK_LINES[prepared.language], fallback: true, reason: detail });
-        return Response.json({ text, fallback: true, reason: `${detail} ; consigne simplifiée a répondu` });
-      }
-      return Response.json({ text, fallback: true, reason: `réponse vide puis seconde tentative réussie (arrêt ${response.stop_reason ?? "?"})` });
-    }
-    return Response.json({ text });
+    // Réplique courte : pas de réflexion, plafond large (la réflexion, quand un modèle l'impose, compte dedans).
+    const first = await askClaude(client, { system, messages, maxTokens: 2048, effort: "low", thinking: "disabled" });
+    let text = tidy(first.text);
+    if (text) return Response.json({ text });
+
+    // Réponse sans texte : on redemande une fois en insistant, puis le personnage relance lui-même.
+    console.error("Mode éco : réponse vide", { stop_reason: first.stopReason, blocks: first.blocks, model: first.model });
+    const nudge: Anthropic.MessageParam = {
+      role: "user",
+      content: `${messages.at(-1)?.content as string}\n\n(${prepared.language === "en" ? "Answer in one or two spoken sentences, then ask a question." : "Réponds en une ou deux phrases parlées, puis pose une question."})`,
+    };
+    const retry = await askClaude(client, { system, messages: [...messages.slice(0, -1), nudge], maxTokens: 2048, effort: "low", thinking: "disabled" });
+    text = tidy(retry.text);
+    const detail = `réponse vide : arrêt ${first.stopReason ?? "?"}, blocs ${first.blocks.join("+") || "aucun"}, modèle ${first.model}`;
+    if (!text) return Response.json({ text: FALLBACK_LINES[prepared.language], fallback: true, reason: detail });
+    return Response.json({ text, fallback: true, reason: `${detail} ; seconde tentative réussie` });
   } catch (error) {
-    const detail = error instanceof Anthropic.APIError ? `${error.status} ${error.message}` : error instanceof Error ? error.message : String(error);
+    const detail = claudeErrorDetail(error);
     console.error("Mode éco : erreur Anthropic", detail);
     const friendly =
       error instanceof Anthropic.APIError && error.status === 401

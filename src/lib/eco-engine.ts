@@ -49,6 +49,13 @@ const RETRY_LINES: Record<Language, string> = {
 
 const SILENCE_MS = 1300;
 const MAX_UTTERANCE_MS = 45000;
+/** Au-delà, on considère que Claude ne répondra pas et le personnage relance. */
+const REPLY_TIMEOUT_MS = 25000;
+/**
+ * Codes d'erreur de la reconnaissance du téléphone qui veulent dire « pas ici »
+ * (iPhone en app installée, service bloqué) : on passe à l'enregistrement + Scribe.
+ */
+const EAR_UNAVAILABLE = new Set(["service-not-allowed", "not-allowed", "language-not-supported", "start-failed", "unavailable"]);
 
 export class EcoEngine {
   private history: TranscriptLine[];
@@ -64,13 +71,18 @@ export class EcoEngine {
   private lastAgentText: string | null = null;
   private level = 0;
   private listenToken = 0;
-  readonly usesPhoneRecognition: boolean;
+  private phoneEar: boolean;
 
   constructor(private readonly options: EcoOptions) {
     this.history = [...(options.history ?? [])];
     this.rate = options.rate;
     this.handsFree = options.handsFree;
-    this.usesPhoneRecognition = speechRecognitionAvailable();
+    this.phoneEar = speechRecognitionAvailable();
+  }
+
+  /** Oreille du téléphone (sinon enregistrement WAV + Scribe). Peut basculer en cours de séance. */
+  get usesPhoneRecognition() {
+    return this.phoneEar;
   }
 
   get currentMode() {
@@ -115,30 +127,36 @@ export class EcoEngine {
     this.handsFree = handsFree;
   }
 
-  /** Appui pour parler : `true` au début de l'appui, `false` au relâchement. */
-  pushToTalk(holding: boolean) {
-    if (holding) {
-      if (this.mode === "speaking") this.speaking?.cancel();
-      this.muted = false;
-      void this.listen(true);
-    } else {
+  /**
+   * Appui pour parler : `true` au début de l'appui, `false` au relâchement.
+   * Renvoie `false` quand l'appui est refusé (le personnage prépare sa réponse).
+   */
+  pushToTalk(holding: boolean): boolean {
+    if (!holding) {
       this.finishListening();
+      return true;
     }
+    if (this.ended || this.mode === "thinking") return false;
+    this.stopSpeaking();
+    this.muted = false;
+    void this.listen(true);
+    return true;
   }
 
   /** Cherif coupe la parole : on se tait et on écoute. */
   interrupt() {
     if (this.mode !== "speaking") return;
-    this.speaking?.cancel();
-    this.speaking = null;
+    this.stopSpeaking();
     this.setMode("idle");
     if (!this.muted) void this.listen();
   }
 
+  /** Relit la dernière réplique (un peu plus lentement), sans la rajouter au texte de la séance. */
   repeatLast() {
-    if (!this.lastAgentText || this.ended) return;
+    if (!this.lastAgentText || this.ended || this.mode === "thinking") return;
+    this.stopSpeaking();
     this.cancelListening();
-    void this.say(this.lastAgentText, Math.min(this.rate, 0.9));
+    void this.say(this.lastAgentText, Math.min(this.rate, 0.9), false);
   }
 
   setRate(rate: number) {
@@ -148,7 +166,7 @@ export class EcoEngine {
   end() {
     if (this.ended) return;
     this.ended = true;
-    this.speaking?.cancel();
+    this.stopSpeaking();
     this.cancelListening();
     this.setMode("idle");
     this.options.callbacks.onDisconnect({ reason: "user" });
@@ -162,34 +180,59 @@ export class EcoEngine {
     this.options.callbacks.onModeChange({ mode });
   }
 
-  private async say(text: string, rate = this.rate) {
+  /** Coupe la voix en cours ; la suite de `say()` qui l'attendait ne fera plus rien. */
+  private stopSpeaking() {
+    this.speaking?.cancel();
+    this.speaking = null;
+  }
+
+  /** Mains libres : on se remet à écouter après un court silence, sauf si autre chose a pris la main entre-temps. */
+  private relistenSoon() {
+    const token = this.listenToken;
+    setTimeout(() => {
+      if (token === this.listenToken && !this.ended && this.mode === "idle" && this.handsFree && !this.muted) void this.listen();
+    }, 300);
+  }
+
+  private async say(text: string, rate = this.rate, record = true) {
     if (this.ended) return;
     this.cancelListening();
+    this.stopSpeaking();
     this.lastAgentText = text;
-    this.history.push({ role: "agent", text });
-    // Les balises <voice> servent à la voix, pas à l'affichage.
-    this.options.callbacks.onMessage({ role: "agent", message: text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
+    if (record) {
+      this.history.push({ role: "agent", text });
+      // Les balises <voice> servent à la voix, pas à l'affichage.
+      this.options.callbacks.onMessage({ role: "agent", message: text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
+    }
     this.setMode("speaking");
     const handle = this.options.speaker.speak(text, rate);
     this.speaking = handle;
     try {
       await handle.done;
     } catch (error) {
-      this.options.callbacks.onError(error instanceof Error ? error.message : "Lecture impossible.", { fatal: false });
+      if (this.speaking === handle && !this.ended) this.options.callbacks.onError(error instanceof Error ? error.message : "Lecture impossible.", { fatal: false });
     }
     if (this.speaking !== handle || this.ended) return;
     this.speaking = null;
     this.setMode("idle");
-    if (this.handsFree && !this.muted) void this.listen();
+    if (this.handsFree && !this.muted) {
+      // Petit délai : le haut-parleur finit de se taire avant que le micro s'ouvre.
+      await new Promise((r) => setTimeout(r, 250));
+      if (this.ended || this.mode !== "idle" || this.speaking) return;
+      void this.listen();
+    }
   }
 
   private async ask(history: TranscriptLine[]): Promise<string | null> {
     this.setMode("thinking");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REPLY_TIMEOUT_MS);
     try {
       const res = await fetch("/api/eco/reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...this.options.body, transcript: history.slice(-40) }),
+        signal: controller.signal,
       });
       const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string; fallback?: boolean; reason?: string };
       if (res.ok && data.text && data.fallback) {
@@ -203,10 +246,13 @@ export class EcoEngine {
         return fatal ? null : RETRY_LINES[this.options.language];
       }
       return data.text;
-    } catch {
-      this.options.callbacks.onError("Pas de connexion. Vérifie ton réseau.", { fatal: false });
+    } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === "AbortError";
+      this.options.callbacks.onError(timedOut ? "Claude met trop de temps à répondre ; le personnage relance." : "Pas de connexion. Vérifie ton réseau.", { fatal: false });
       this.setMode("idle");
       return RETRY_LINES[this.options.language];
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -214,7 +260,8 @@ export class EcoEngine {
     if (this.ended) return;
     const clean = text.trim();
     if (!clean) {
-      if (this.handsFree && !this.muted) void this.listen();
+      this.setMode("idle");
+      this.relistenSoon();
       return;
     }
     this.history.push({ role: "user", text: clean });
@@ -246,11 +293,11 @@ export class EcoEngine {
 
   private async listen(manual = false) {
     if (this.ended || this.mode === "listening" || this.mode === "thinking") return;
-    if (this.mode === "speaking") this.speaking?.cancel();
+    if (this.mode === "speaking") this.stopSpeaking();
     const token = ++this.listenToken;
     this.setMode("listening");
     const lang = LOCALES[this.options.language];
-    if (this.usesPhoneRecognition) {
+    if (this.phoneEar) {
       // Mains libres : fin de phrase après 1,8 s de silence ; appui pour parler : jusqu'au relâchement.
       const handle = recognizeOnce({ lang, onInterim: this.options.callbacks.onInterim, maxMs: manual ? 90000 : MAX_UTTERANCE_MS, endSilenceMs: manual ? null : 1800 });
       this.recognizing = handle;
@@ -259,13 +306,19 @@ export class EcoEngine {
       this.recognizing = null;
       if (outcome.error) {
         this.setMode("idle");
+        if (EAR_UNAVAILABLE.has(outcome.errorCode ?? "") && typeof navigator !== "undefined" && Boolean(navigator.mediaDevices)) {
+          // iPhone en app installée : la reconnaissance existe mais refuse de tourner. On change d'oreille pour la séance.
+          this.phoneEar = false;
+          this.options.callbacks.onError("La reconnaissance vocale du téléphone ne marche pas ici : je passe par l'enregistrement et la transcription ElevenLabs.", { fatal: false });
+          void this.listen(manual);
+          return;
+        }
         this.options.callbacks.onError(outcome.error);
         return;
       }
       if (!outcome.text) {
         this.setMode("idle");
-        // Mains libres : on se remet à écouter après un court silence.
-        if (this.handsFree && !this.muted && !manual) setTimeout(() => void this.listen(), 300);
+        if (!manual) this.relistenSoon();
         return;
       }
       this.setMode("thinking");
@@ -313,7 +366,7 @@ export class EcoEngine {
       const blob = await recorder.stop();
       if (!heard) {
         this.setMode("idle");
-        if (this.handsFree && !this.muted && !manual) setTimeout(() => void this.listen(), 300);
+        if (!manual) this.relistenSoon();
         return;
       }
       this.setMode("thinking");
@@ -332,7 +385,8 @@ export class EcoEngine {
     } catch (error) {
       if (token !== this.listenToken || this.ended) return;
       this.setMode("idle");
-      this.options.callbacks.onError(error instanceof Error ? error.message : "Micro indisponible.");
+      const denied = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError");
+      this.options.callbacks.onError(denied ? "Autorise le micro pour ce site, puis réessaie." : error instanceof Error ? error.message : "Micro indisponible.");
     }
   }
 }
