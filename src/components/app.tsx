@@ -166,6 +166,14 @@ function AppInner() {
   const [ecoStatus, setEcoStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [ecoMode, setEcoMode] = useState<EcoMode>("idle");
   const [interim, setInterim] = useState("");
+  // Avertissement passager (la séance continue), effacé tout seul.
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 7000);
+  }, []);
 
   type StartOptions = {
     params?: Partial<SessionParams>;
@@ -189,7 +197,9 @@ function AppInner() {
     }
   }, [refreshRemote]);
 
-  const pushLine = useCallback((role: "user" | "agent", text: string) => {
+  const pushLine = useCallback((role: "user" | "agent", raw: string) => {
+    const text = raw.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim();
+    if (!text) return;
     setTranscript((prev) => {
       const next = [...prev, { id: prev.length, role, text }];
       transcriptRef.current = next;
@@ -461,7 +471,10 @@ function AppInner() {
                 if (ending.current || restarting.current) return;
                 if (details.reason === "error") setError(details.message ?? "La discussion s'est coupée.");
               },
-              onError: (message) => setError(message),
+              onError: (message, options) => {
+                if (options?.fatal === false) showToast(message);
+                else setError(message);
+              },
               onMessage: ({ role, message }) => {
                 if (role === "user") userTurns.current += 1;
                 pushLine(role, message);
@@ -548,7 +561,7 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine, voiceChoice],
+    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine, voiceChoice, showToast],
   );
 
   useEffect(() => {
@@ -919,6 +932,11 @@ function AppInner() {
         </div>
       </header>
 
+      {toast && (
+        <p role="status" className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening">
+          {toast}
+        </p>
+      )}
       {capReached && (
         <p className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening">
           Plafond du jour atteint ({remote?.cost.dailyCapMinutes ?? 30} min). Tu peux terminer quand tu veux.

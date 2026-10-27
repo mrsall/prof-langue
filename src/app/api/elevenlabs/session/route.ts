@@ -15,7 +15,9 @@ export const maxDuration = 30;
  * La clé API ne quitte jamais le serveur : le téléphone reçoit seulement un
  * jeton WebRTC (ou une URL signée WebSocket) valable quelques minutes.
  */
-const ELEVENLABS_API = "https://api.elevenlabs.io/v1/convai/conversation";
+import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
+
+const ELEVENLABS_API = `${ELEVENLABS_API_BASE}/v1/convai/conversation`;
 
 type Body = SessionBody & {
   voice?: string;

@@ -4,7 +4,9 @@
  * partagée (accent de France, pas québécois ni belge). Les voix anglaises
  * lisant du français donnent un accent étranger : c'est ce qu'on évite ici.
  */
-const API = "https://api.elevenlabs.io/v1";
+import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
+
+const API = `${ELEVENLABS_API_BASE}/v1`;
 const LABEL = "prof-langue-fr";
 
 export type FrenchVoice = { voiceId: string; name: string; gender: "male" | "female" };

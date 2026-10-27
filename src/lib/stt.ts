@@ -1,4 +1,5 @@
 import type { Language } from "@/config/personalities";
+import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
 
 /**
  * Transcription d'un court enregistrement avec Scribe (ElevenLabs), compris
@@ -29,7 +30,7 @@ export async function transcribeWithScribe(audio: Blob, language: Language): Pro
     form.append("diarize", "false");
     let res: Response;
     try {
-      res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
+      res = await fetch(`${ELEVENLABS_API_BASE}/v1/speech-to-text`, { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
     } catch (error) {
       throw new Error(`ElevenLabs injoignable : ${error instanceof Error ? error.message : String(error)}`);
     }

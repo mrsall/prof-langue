@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "node scripts/test/run-e2e.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

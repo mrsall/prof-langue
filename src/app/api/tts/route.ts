@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { isLanguage } from "@/config/personalities";
 import { resolveVoiceId } from "@/lib/tts-voices";
+import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
 
 export const maxDuration = 30;
 
@@ -30,7 +31,7 @@ export async function GET(request: Request) {
 
   let res: Response;
   try {
-    res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_22050_32`, {
+    res = await fetch(`${ELEVENLABS_API_BASE}/v1/text-to-speech/${voiceId}?output_format=mp3_22050_32`, {
       method: "POST",
       headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
       body: JSON.stringify({
@@ -50,7 +51,7 @@ export async function GET(request: Request) {
   const audio = await res.arrayBuffer();
   return new Response(audio, {
     headers: {
-      "Content-Type": "audio/mpeg",
+      "Content-Type": res.headers.get("content-type") || "audio/mpeg",
       "Cache-Control": "private, max-age=86400",
       "Content-Length": String(audio.byteLength),
     },

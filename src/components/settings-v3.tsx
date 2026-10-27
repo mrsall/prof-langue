@@ -134,6 +134,20 @@ export function SettingsV3() {
     }
   };
 
+  const [claude, setClaude] = useState<{ ok: boolean; model: string; ms: number; stopReason: string | null; textLength: number; sample: string; error: string | null } | null>(null);
+  const [claudeBusy, setClaudeBusy] = useState(false);
+  const testClaude = async () => {
+    setClaudeBusy(true);
+    try {
+      const res = await fetch("/api/diagnostic/claude");
+      setClaude((await res.json()) as typeof claude);
+    } catch {
+      setClaude({ ok: false, model: "?", ms: 0, stopReason: null, textLength: 0, sample: "", error: "impossible de joindre le serveur de l'app" });
+    } finally {
+      setClaudeBusy(false);
+    }
+  };
+
   if (state === null) {
     return <p className="text-sm text-muted">{error ?? "Chargement des réglages…"}</p>;
   }
@@ -208,6 +222,26 @@ export function SettingsV3() {
             ? "Les séances, le carnet de mots, le niveau et les réglages sont enregistrés."
             : "Sans base de données, les séances restent seulement sur ce téléphone et le carnet, le suivi, le test de niveau et les rappels sont désactivés. Pour l'activer : crée un projet sur supabase.com, copie la chaîne de connexion (Connect → Transaction pooler) dans Vercel sous le nom DATABASE_URL, puis Redeploy. Les tables se créent toutes seules."}
         </p>
+      </section>
+
+      <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Claude (le cerveau)</h2>
+          {claude && <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${claude.ok ? "bg-speaking/15 text-speaking" : "bg-danger/10 text-danger"}`}>{claude.ok ? "Répond" : "Problème"}</span>}
+        </div>
+        <p className="text-sm text-muted">Envoie une phrase de test à Claude, exactement comme en mode éco, et montre ce qu&apos;il répond. Utile si un personnage reste muet.</p>
+        <button type="button" disabled={claudeBusy} onClick={testClaude} className="h-11 rounded-xl border border-line bg-bg text-sm font-bold disabled:opacity-60">
+          {claudeBusy ? "Test en cours…" : "Tester Claude"}
+        </button>
+        {claude && (
+          <div className="rounded-xl bg-bg px-3 py-2 text-xs">
+            <p className="font-mono text-muted">
+              modèle {claude.model} · {claude.ms} ms · arrêt {claude.stopReason ?? "?"} · {claude.textLength} caractères
+            </p>
+            {claude.sample && <p className="mt-1">« {claude.sample} »</p>}
+            {claude.error && <p className="mt-1 text-danger">{claude.error}</p>}
+          </div>
+        )}
       </section>
 
       <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
