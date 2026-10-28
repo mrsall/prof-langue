@@ -70,6 +70,12 @@ docker compose up -d --build
 
 ## Si ça coince
 
+- Pour récupérer la dernière version d'un seul fichier sans retélécharger tout le ZIP (PowerShell, dans `pc-voix`) :
+  ```
+  Invoke-WebRequest -Uri https://raw.githubusercontent.com/mrsall/prof-langue/main/pc-voix/Dockerfile -OutFile Dockerfile
+  Invoke-WebRequest -Uri https://raw.githubusercontent.com/mrsall/prof-langue/main/pc-voix/server.py -OutFile server.py
+  ```
+
 - `docker compose logs -f` montre ce que fait le serveur (téléchargement, chargement, chaque phrase avec sa durée).
 - « CUDA not available » dans les journaux : le pilote NVIDIA ou l'accès GPU de Docker manque, reprends le point 1.3.
 - L'app dit « PC injoignable » : vérifie l'adresse `/health` depuis le téléphone, et que `PC_TTS_URL` dans Vercel n'a pas de barre oblique à la fin.
