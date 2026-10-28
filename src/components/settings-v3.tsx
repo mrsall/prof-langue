@@ -149,13 +149,13 @@ export function SettingsV3() {
   };
 
   const [gemini, setGemini] = useState<{ ok: boolean; model: string | null; ms: number; error: string | null } | null>(null);
-  const [pc, setPc] = useState<{ ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; ms: number; generationMs: number | null; error: string | null } | null>(null);
+  const [pc, setPc] = useState<{ ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; live?: boolean; claude?: string | null; ms: number; generationMs: number | null; error: string | null } | null>(null);
   const [pcBusy, setPcBusy] = useState(false);
   const testPc = async () => {
     setPcBusy(true);
     try {
       const res = await fetch("/api/diagnostic/pc");
-      const data = (await res.json()) as { ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; ms: number; generationMs: number | null; error: string | null };
+      const data = (await res.json()) as { ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; live?: boolean; claude?: string | null; ms: number; generationMs: number | null; error: string | null };
       setPc(data);
       if (data.ok) {
         const audio = new Audio(`/api/tts?engine=pc&lang=fr&personality=prof&text=${encodeURIComponent("Bonjour Cherif, je suis la voix de ton PC. On commence quand tu veux.")}`);
@@ -296,7 +296,7 @@ export function SettingsV3() {
             </button>
             {pc && (
               <p className={`rounded-xl bg-bg px-3 py-2 font-mono text-xs ${pc.ok ? "text-muted" : "text-danger"}`}>
-                {pc.ok ? `${pc.gpu ?? "GPU ?"} · ${pc.model ?? "modèle ?"} · ${pc.generationMs ?? "?"} ms de synthèse, ${pc.ms} ms au total${pc.voices.length ? ` · ${pc.voices.length} voix` : " · voix par défaut"}${pc.stt ? ` · oreille : ${pc.stt}` : " · oreille Whisper absente"}` : pc.error}
+                {pc.ok ? `${pc.gpu ?? "GPU ?"} · ${pc.model ?? "modèle ?"} · ${pc.generationMs ?? "?"} ms de synthèse, ${pc.ms} ms au total${pc.voices.length ? ` · ${pc.voices.length} voix` : " · voix par défaut"}${pc.stt ? ` · oreille : ${pc.stt}` : " · oreille Whisper absente"}${pc.claude ? ` · Claude sur le PC : ${pc.claude}` : ""}${pc.live ? " · temps réel prêt" : " · temps réel pas prêt"}` : pc.error}
               </p>
             )}
           </>

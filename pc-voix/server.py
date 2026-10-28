@@ -33,7 +33,12 @@ from starlette.concurrency import run_in_threadpool
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pc-voix")
 
-TOKEN = os.environ.get("PC_TTS_TOKEN", "").strip()
+def clean_env(name: str) -> str:
+    """Valeur d'une variable d'environnement sans espaces, retours chariot ni guillemets (fréquents dans un .env écrit à la main)."""
+    return os.environ.get(name, "").strip().strip("\r\n").strip().strip("\"'").strip()
+
+
+TOKEN = clean_env("PC_TTS_TOKEN")
 VOICES_DIR = Path(os.environ.get("PC_TTS_VOICES", "/voix"))
 T3 = os.environ.get("CHATTERBOX_T3", "v3").strip() or None
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -209,6 +214,8 @@ async def health():
             "french_reference": voice_file("prof", "fr") is not None,
             "stt": state["stt_name"],
             "stt_error": state["stt_error"],
+            "live": state.get("vad") is not None and state["stt"] is not None and bool(ANTHROPIC_KEY),
+            "claude": state.get("claude"),
             "error": state["error"],
         }
     )
@@ -279,8 +286,34 @@ import re
 import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5").strip() or "claude-haiku-5-5"
+ANTHROPIC_KEY = clean_env("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL = clean_env("ANTHROPIC_MODEL") or "claude-haiku-5-5"
+
+
+def key_hint(key: str) -> str | None:
+    """Pour vérifier la clé sans la montrer : début, fin et longueur."""
+    if not key:
+        return None
+    return f"{key[:12]}…{key[-4:]} ({len(key)} caractères)"
+
+
+async def check_claude():
+    """Au démarrage : la clé est-elle acceptée par Anthropic ? Visible dans /health (claude)."""
+    state["claude"] = {"configured": bool(ANTHROPIC_KEY), "ok": False, "hint": key_hint(ANTHROPIC_KEY), "model": ANTHROPIC_MODEL, "error": None}
+    if not ANTHROPIC_KEY:
+        state["claude"]["error"] = "ANTHROPIC_API_KEY absente de pc-voix/.env"
+        return
+    try:
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic(api_key=ANTHROPIC_KEY)
+        await client.models.list(limit=1)
+        state["claude"]["ok"] = True
+        log.info("Clé Anthropic acceptée (%s)", key_hint(ANTHROPIC_KEY))
+    except Exception as error:  # noqa: BLE001
+        msg = str(error)
+        state["claude"]["error"] = ("clé refusée par Anthropic (401) : vérifie-la sur console.anthropic.com → API Keys" if "401" in msg or "authentication" in msg.lower() else msg[:200])
+        log.warning("Clé Anthropic : %s", state["claude"]["error"])
 SR = 16000
 WINDOW = 512  # taille de fenêtre du VAD Silero à 16 kHz (32 ms)
 START_WINDOWS = 3  # ≈ 100 ms de voix pour commencer une prise de parole
@@ -308,6 +341,7 @@ async def startup_live():
     except Exception as error:  # noqa: BLE001
         state["vad_error"] = str(error)
         log.exception("VAD indisponible : pas de mode temps réel")
+    await check_claude()
     if not ANTHROPIC_KEY:
         log.warning("ANTHROPIC_API_KEY absente de pc-voix/.env : le mode temps réel ne pourra pas répondre.")
 
@@ -692,6 +726,8 @@ async def live(ws: WebSocket):
         missing.append("la détection de voix (Silero)")
     if not ANTHROPIC_KEY:
         missing.append("la clé Anthropic (ANTHROPIC_API_KEY dans pc-voix/.env)")
+    elif state.get("claude") and not state["claude"]["ok"]:
+        missing.append(f"une clé Anthropic valable ({state['claude']['error']})")
     if missing:
         await ws.send_text(json.dumps({"type": "error", "message": "Le PC n'est pas prêt pour le temps réel : il manque " + ", ".join(missing) + ".", "fatal": True}, ensure_ascii=False))
         await ws.close()

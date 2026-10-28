@@ -71,7 +71,8 @@ Le téléphone parle directement à ton PC (WebSocket à travers Tailscale) : le
    ```
    ANTHROPIC_API_KEY=sk-ant-…
    ```
-2. Reconstruis : `docker compose up -d --build`. Les journaux doivent montrer « VAD Silero chargé » et « Whisper chargé ».
+   Sans guillemets, sans espace, la clé complète (elle commence par `sk-ant-` et fait une centaine de caractères). Vercel ne permet pas de relire une clé : si tu ne l'as plus, crée-en une nouvelle sur console.anthropic.com → API Keys → Create Key, et mets la même dans Vercel (`ANTHROPIC_API_KEY`) pour que tout le monde utilise la même.
+2. Reconstruis : `docker compose up -d --build` (après un simple changement du `.env`, `docker compose up -d` suffit). Les journaux doivent montrer « VAD Silero chargé », « Whisper chargé » et « Clé Anthropic acceptée ». Sinon, `http://localhost:8765/health` → `claude.error` explique le problème (« clé refusée par Anthropic (401) » = la clé est fausse ou tronquée).
 3. Sur l'accueil de l'app, le choix « Temps réel (mon PC) » apparaît à côté de « ElevenLabs » et « Mode éco » dès que `PC_TTS_URL` et `PC_TTS_TOKEN` sont dans Vercel. Choisis-le et lance une séance.
 4. Pendant la séance : mains libres conseillées. Pour couper le personnage, parle simplement (ou appuie sur le micro). « Répète » relit la dernière phrase. La vitesse de lecture n'est pas réglable dans ce mode.
 
