@@ -8,10 +8,14 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/cache/huggingface \
     PC_TTS_VOICES=/voix
 
-RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 libgomp1 && rm -rf /var/lib/apt/lists/*
+# ffmpeg : pour lire des voix de référence en mp3 / m4a (enregistrement du téléphone, LibriVox).
+RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 libgomp1 ffmpeg git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN pip install --upgrade pip && pip install chatterbox-tts fastapi "uvicorn[standard]" soundfile
+# Par défaut, la version du dépôt officiel (modèle multilingue v3, meilleur en français).
+# Si la construction échoue un jour : docker compose build --build-arg CHATTERBOX_SOURCE=chatterbox-tts==0.1.7
+ARG CHATTERBOX_SOURCE=git+https://github.com/resemble-ai/chatterbox.git
+RUN pip install --upgrade pip && pip install "${CHATTERBOX_SOURCE}" fastapi "uvicorn[standard]" soundfile
 
 COPY server.py /app/server.py
 

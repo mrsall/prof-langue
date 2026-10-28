@@ -7,10 +7,12 @@ Tailscale, avec un mot de passe partagé (PC_TTS_TOKEN).
   GET  /health                       → { ok, model, device, voices, warm }
   POST /tts  { text, language, voice } → audio/wav   (Authorization: Bearer <PC_TTS_TOKEN>)
 
-Les voix : un fichier WAV de 6 à 15 s dans le dossier ./voix, nommé d'après le
-personnage (ami.wav, grand-frere.wav, debatteur.wav, prof.wav, collegue.wav,
-situation.wav, juge.wav). Variante par langue possible : prof.en.wav. Sans
-fichier, la voix par défaut du modèle est utilisée.
+Les voix : Chatterbox COPIE la voix (et l'accent) d'un fichier de référence.
+Sa voix intégrée est celle d'un anglophone : en français, il faut une référence
+de francophone. Fichiers dans ./voix (wav, mp3, m4a, ogg, flac ; seules les
+premières secondes servent), cherchés dans cet ordre :
+  <personnage>.<langue>.ext  (prof.fr.mp3)   > <personnage>.ext  (prof.mp3)
+  > default.<langue>.ext  (default.fr.mp3)   > default.ext        > voix intégrée
 """
 import asyncio
 import io
@@ -35,6 +37,7 @@ T3 = os.environ.get("CHATTERBOX_T3", "v3").strip() or None
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 LANGUAGES = {"fr", "en"}
 MAX_CHARS = 600
+AUDIO_EXT = (".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac", ".opus")
 
 app = FastAPI(title="prof-langue · voix du PC")
 state = {"model": None, "warm": False, "model_name": None, "error": None}
@@ -56,26 +59,37 @@ def load_model():
     return model, name
 
 
-def voice_file(voice: str, language: str):
-    """Fichier de référence pour une voix, ou None (voix par défaut du modèle)."""
-    safe = "".join(c for c in (voice or "") if c.isalnum() or c in "-_").lower()
-    if not safe:
-        return None
-    for candidate in (VOICES_DIR / f"{safe}.{language}.wav", VOICES_DIR / f"{safe}.wav"):
+def _find(stem: str):
+    for ext in AUDIO_EXT:
+        candidate = VOICES_DIR / f"{stem}{ext}"
         if candidate.is_file():
             return str(candidate)
     return None
 
 
+def voice_file(voice: str, language: str):
+    """Fichier de référence pour une voix et une langue, ou None (voix intégrée du modèle)."""
+    safe = "".join(c for c in (voice or "") if c.isalnum() or c in "-_").lower()
+    stems = ([f"{safe}.{language}", safe] if safe else []) + [f"default.{language}", "default"]
+    for stem in stems:
+        found = _find(stem)
+        if found:
+            return found
+    return None
+
+
 def available_voices():
+    """Noms des fichiers de référence présents (sans extension), ex. ["default.fr", "prof", "prof.en"]."""
     if not VOICES_DIR.is_dir():
         return []
-    return sorted({p.name.split(".")[0] for p in VOICES_DIR.glob("*.wav")})
+    return sorted({p.name[: -len(p.suffix)] for p in VOICES_DIR.iterdir() if p.suffix.lower() in AUDIO_EXT})
 
 
 def synthesize(text: str, language: str, voice: str) -> bytes:
     model = state["model"]
     prompt = voice_file(voice, language)
+    if not prompt and language == "fr":
+        log.warning("Aucune voix de référence française dans %s : la voix intégrée a un accent anglais (voir voix/README.md).", VOICES_DIR)
     wav = model.generate(text, language_id=language, audio_prompt_path=prompt, exaggeration=0.5, cfg_weight=0.5)
     samples = wav.squeeze(0).detach().cpu().numpy()
     buf = io.BytesIO()
@@ -120,6 +134,7 @@ async def health():
             "device": DEVICE,
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
             "voices": available_voices(),
+            "french_reference": voice_file("prof", "fr") is not None,
             "error": state["error"],
         }
     )

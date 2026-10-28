@@ -50,6 +50,17 @@ Vercel → ton projet → Settings → Environment Variables, ajoute :
 
 Puis Deployments → Redeploy. Dans l'app : Réglages → carte « Voix de mon PC » → « Tester » (elle parle). Sur l'accueil, choisis la voix « Mon PC ».
 
+## 5. Donner une vraie voix française (important)
+
+Sans fichier de référence, Chatterbox parle français avec un accent anglais : sa voix intégrée est celle d'un anglophone. Dépose au moins un fichier `default.fr.mp3` (voix de francophone natif, libre de droits, par exemple un chapitre LibriVox) dans le dossier `voix`, et `default.en.mp3` pour l'anglais. Tout est expliqué dans `voix/README.md`. Pas besoin de redémarrer.
+
+## Mettre à jour le serveur
+
+Quand le dépôt change : retélécharge le ZIP, remplace le contenu du dossier `pc-voix` **en gardant ton fichier `.env` et ton dossier `voix`**, puis dans PowerShell, dans `pc-voix` :
+```
+docker compose up -d --build
+```
+
 ## Au quotidien
 
 - Docker Desktop démarre avec Windows et relance le serveur tout seul ; Tailscale aussi. Si ce n'est pas le cas : `docker compose up -d` puis `tailscale funnel --bg 8765` dans le dossier `pc-voix`.
