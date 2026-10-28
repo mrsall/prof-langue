@@ -89,7 +89,7 @@ function mergeChunks(chunks: Float32Array[]) {
 }
 
 /** Moyenne glissante simple : suffisant pour la voix, et léger pour le téléphone. */
-function downsample(input: Float32Array, fromRate: number, toRate: number) {
+export function downsample(input: Float32Array, fromRate: number, toRate: number) {
   if (fromRate === toRate) return input;
   const ratio = fromRate / toRate;
   const length = Math.floor(input.length / ratio);

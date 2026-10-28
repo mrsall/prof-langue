@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { prepareSession, type SessionBody } from "@/lib/session-prompt";
+import { prepareSession, SPOKEN_RULES, type SessionBody } from "@/lib/session-prompt";
 import type { TranscriptLine } from "@/lib/prompt";
 import { askClaude, claudeErrorDetail, streamClaude } from "@/lib/claude";
 
@@ -16,11 +16,6 @@ type Body = SessionBody & { transcript?: TranscriptLine[]; /** Réponse au fil d
 const FALLBACK_LINES: Record<"en" | "fr", string> = {
   en: "Sorry, I had a small hiccup on my side, not yours. Can you say that again?",
   fr: "Pardon, j'ai eu un petit souci de mon côté, pas du tien. Tu peux redire ta phrase ?",
-};
-
-const ECO_RULES: Record<"en" | "fr", string> = {
-  en: "You are speaking through a phone voice that reads your text aloud. Reply with plain spoken text only: no markdown, no lists, no stage directions, no emojis. One to three short sentences, then a question. Keep any <voice name=\"judge\"> tags exactly as instructed for the debate; never use other tags.",
-  fr: "Tu parles à travers une voix de téléphone qui lit ton texte à voix haute. Réponds en texte parlé simple : pas de markdown, pas de liste, pas de didascalie, pas d'émoji. Une à trois phrases courtes, puis une question. Garde les balises <voice name=\"juge\"> exactement comme demandé pour le débat ; aucune autre balise.",
 };
 
 export async function POST(request: Request) {
@@ -61,7 +56,7 @@ export async function POST(request: Request) {
 
   const system = [
     prepared.prompt,
-    ECO_RULES[prepared.language],
+    SPOKEN_RULES[prepared.language],
     opening ? (prepared.language === "en" ? `You opened the conversation with: "${opening}"` : `Tu as ouvert la discussion avec : « ${opening} »`) : "",
   ]
     .filter(Boolean)

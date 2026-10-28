@@ -122,3 +122,9 @@ export async function prepareSession(body: SessionBody): Promise<PreparedSession
           : pickFirstMessage(personality, language, topic ?? ""));
   return { personality, language, correction, kind, prompt, firstMessage };
 }
+
+/** Règles pour un personnage lu par une voix de synthèse (mode éco et mode temps réel). */
+export const SPOKEN_RULES: Record<"en" | "fr", string> = {
+  en: "You are speaking through a phone voice that reads your text aloud. Reply with plain spoken text only: no markdown, no lists, no stage directions, no emojis. One to three short sentences, then a question. Keep any <voice name=\"judge\"> tags exactly as instructed for the debate; never use other tags.",
+  fr: "Tu parles à travers une voix de téléphone qui lit ton texte à voix haute. Réponds en texte parlé simple : pas de markdown, pas de liste, pas de didascalie, pas d'émoji. Une à trois phrases courtes, puis une question. Garde les balises <voice name=\"juge\"> exactement comme demandé pour le débat ; aucune autre balise.",
+};

@@ -13,10 +13,35 @@ import {
   type Language,
   type Personality,
 } from "@/config/personalities";
-import { SPEEDS, SPEED_ORDER, SPEED_RESUME_MESSAGES, isSpeedKey, speedValue, type SpeedKey } from "@/config/speeds";
-import { EcoEngine, type EcoMode, type EcoTiming } from "@/lib/eco-engine";
-import { VOICE_CHOICES, VOICE_CHOICE_KEY, createSpeaker, parseVoiceChoice, unlockAudio, type VoiceChoice } from "@/lib/voice-engine";
-import { CORRECTION_LEVELS, CORRECTION_ORDER, isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
+import {
+  SPEEDS,
+  SPEED_ORDER,
+  SPEED_RESUME_MESSAGES,
+  isSpeedKey,
+  speedValue,
+  type SpeedKey,
+} from "@/config/speeds";
+import {
+  EcoEngine,
+  type EcoCallbacks,
+  type EcoMode,
+  type EcoTiming,
+} from "@/lib/eco-engine";
+import { LiveEngine } from "@/lib/live-engine";
+import {
+  VOICE_CHOICES,
+  VOICE_CHOICE_KEY,
+  createSpeaker,
+  parseVoiceChoice,
+  unlockAudio,
+  type VoiceChoice,
+} from "@/lib/voice-engine";
+import {
+  CORRECTION_LEVELS,
+  CORRECTION_ORDER,
+  isCorrectionLevel,
+  type CorrectionLevel,
+} from "@/config/correction";
 import { randomTopic } from "@/config/topics";
 import { usableForShadowing } from "@/config/shadowing";
 import { useLocalStorage } from "@/lib/use-local-storage";
@@ -24,7 +49,12 @@ import { useProgress, useToday } from "@/lib/progress";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
 import type { Progression } from "@/app/api/sessions/route";
-import { EAR_CHOICES, EAR_CHOICE_KEY, parseEarChoice, type EarChoice } from "@/lib/ear";
+import {
+  EAR_CHOICES,
+  EAR_CHOICE_KEY,
+  parseEarChoice,
+  type EarChoice,
+} from "@/lib/ear";
 import type { ReglagesState } from "@/app/api/reglages/route";
 import type { SessionKind, ReviewWord, Rematch } from "@/lib/prompt";
 import { levelIsStale, type LevelInfo } from "@/lib/levels";
@@ -41,7 +71,7 @@ type TranscriptLine = { id: number; role: "user" | "agent"; text: string };
 type ConnectionType = "webrtc" | "websocket";
 type TalkMode = "mains-libres" | "appui";
 /** Qui fait la voix : ElevenLabs (naturelle, minutes payantes) ou le téléphone (éco, gratuit). */
-type Engine = "elevenlabs" | "eco";
+type Engine = "elevenlabs" | "eco" | "live";
 type TopicChoice = { title: string | null; own: boolean };
 
 type SessionParams = {
@@ -101,15 +131,21 @@ function AppInner() {
   const [savedSpeed, setSavedSpeed] = useLocalStorage(SPEED_KEY);
   const speed: SpeedKey = isSpeedKey(savedSpeed) ? savedSpeed : "normal";
   const [savedConnection] = useLocalStorage(CONNECTION_KEY);
-  const connectionType: ConnectionType = savedConnection === "websocket" ? "websocket" : "webrtc";
+  const connectionType: ConnectionType =
+    savedConnection === "websocket" ? "websocket" : "webrtc";
   const [savedShowText, setSavedShowText] = useLocalStorage(SHOW_TEXT_KEY);
   const showText = savedShowText === "1";
   const [savedTalkMode, setSavedTalkMode] = useLocalStorage(TALK_MODE_KEY);
-  const talkMode: TalkMode = savedTalkMode === "appui" ? "appui" : "mains-libres";
+  const talkMode: TalkMode =
+    savedTalkMode === "appui" ? "appui" : "mains-libres";
   const handsFree = talkMode === "mains-libres";
   const [savedEngine, setSavedEngine] = useLocalStorage(ENGINE_KEY);
-  const engine: Engine = savedEngine === "eco" ? "eco" : "elevenlabs";
-  const [savedVoiceChoice, setSavedVoiceChoice] = useLocalStorage(VOICE_CHOICE_KEY);
+  const engine: Engine =
+    savedEngine === "eco" || savedEngine === "live"
+      ? savedEngine
+      : "elevenlabs";
+  const [savedVoiceChoice, setSavedVoiceChoice] =
+    useLocalStorage(VOICE_CHOICE_KEY);
   const voiceChoice: VoiceChoice = parseVoiceChoice(savedVoiceChoice);
   const [savedEarChoice, setSavedEarChoice] = useLocalStorage(EAR_CHOICE_KEY);
   const earChoice: EarChoice = parseEarChoice(savedEarChoice);
@@ -117,8 +153,12 @@ function AppInner() {
   const language: Language = isLanguage(savedLanguage) ? savedLanguage : "en";
   const [savedMode, setSavedMode] = useLocalStorage(MODE_KEY);
   const personality = findPersonality(savedMode) ?? PERSONALITIES[0];
-  const [savedCorrection, setSavedCorrection] = useLocalStorage(`prof-langue:correction:${personality.id}`);
-  const correction: CorrectionLevel = isCorrectionLevel(savedCorrection) ? savedCorrection : personality.correction;
+  const [savedCorrection, setSavedCorrection] = useLocalStorage(
+    `prof-langue:correction:${personality.id}`,
+  );
+  const correction: CorrectionLevel = isCorrectionLevel(savedCorrection)
+    ? savedCorrection
+    : personality.correction;
 
   // Séance en cours.
   const [live, setLive] = useState<SessionParams | null>(null);
@@ -132,8 +172,12 @@ function AppInner() {
   const [bilan, setBilan] = useState<BilanResult | null>(null);
   const [bilanLoading, setBilanLoading] = useState(false);
   const [remote, setRemote] = useState<ReglagesState | null>(null);
-  const [levelResult, setLevelResult] = useState<(LevelInfo & { error?: string }) | null>(null);
-  const [capPrompt, setCapPrompt] = useState<Partial<SessionParams> | null>(null);
+  const [levelResult, setLevelResult] = useState<
+    (LevelInfo & { error?: string }) | null
+  >(null);
+  const [capPrompt, setCapPrompt] = useState<Partial<SessionParams> | null>(
+    null,
+  );
   const [savedCost, setSavedCost] = useState<number | null>(null);
   // Courbe de progression renvoyée par le serveur après l'enregistrement de la séance.
   const [progression, setProgression] = useState<Progression | null>(null);
@@ -169,12 +213,16 @@ function AppInner() {
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const orbRef = useRef<HTMLDivElement>(null);
   const transcriptBox = useRef<HTMLDivElement>(null);
-  const startRef = useRef<(opts: StartOptions) => Promise<boolean>>(async () => false);
+  const startRef = useRef<(opts: StartOptions) => Promise<boolean>>(
+    async () => false,
+  );
   const finishRef = useRef<() => void>(() => {});
   const autoFinishTimer = useRef<number | null>(null);
   // Mode éco : moteur côté téléphone, à la place de la conversation ElevenLabs.
-  const ecoRef = useRef<EcoEngine | null>(null);
-  const [ecoStatus, setEcoStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
+  const ecoRef = useRef<EcoEngine | LiveEngine | null>(null);
+  const [ecoStatus, setEcoStatus] = useState<
+    "disconnected" | "connecting" | "connected"
+  >("disconnected");
   const [ecoMode, setEcoMode] = useState<EcoMode>("idle");
   const [interim, setInterim] = useState("");
   // Réplique du personnage en train de s'écrire (mode éco, flux).
@@ -198,7 +246,9 @@ function AppInner() {
 
   const refreshRemote = useCallback(() => {
     fetch("/api/reglages")
-      .then(async (res) => (res.ok ? ((await res.json()) as ReglagesState) : null))
+      .then(async (res) =>
+        res.ok ? ((await res.json()) as ReglagesState) : null,
+      )
       .then((data) => {
         if (data) setRemote(data);
       })
@@ -208,12 +258,17 @@ function AppInner() {
   useEffect(() => {
     refreshRemote();
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
+      navigator.serviceWorker
+        .register("/sw.js", { scope: "/" })
+        .catch(() => undefined);
     }
   }, [refreshRemote]);
 
   const pushLine = useCallback((role: "user" | "agent", raw: string) => {
-    const text = raw.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim();
+    const text = raw
+      .replace(/<\/?voice[^>]*>/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
     if (!text) return;
     setTranscript((prev) => {
       const next = [...prev, { id: prev.length, role, text }];
@@ -231,7 +286,8 @@ function AppInner() {
         vadStart.current = now;
       } else if (vadScore < 0.3 && vadActive.current) {
         vadActive.current = false;
-        if (vadStart.current != null) userTalkMs.current += now - vadStart.current;
+        if (vadStart.current != null)
+          userTalkMs.current += now - vadStart.current;
         vadStart.current = null;
       }
     },
@@ -260,28 +316,53 @@ function AppInner() {
       }
       if (ending.current || restarting.current) return;
       if (details.reason === "error") {
-        if (!everConnected.current && attemptType.current === "webrtc" && !fallbackTried.current) {
+        if (
+          !everConnected.current &&
+          attemptType.current === "webrtc" &&
+          !fallbackTried.current
+        ) {
           fallbackTried.current = true;
-          setNotice("La connexion audio a été coupée. Nouvel essai avec une autre méthode…");
-          void startRef.current({ context: lastContext.current, force: "websocket" });
+          setNotice(
+            "La connexion audio a été coupée. Nouvel essai avec une autre méthode…",
+          );
+          void startRef.current({
+            context: lastContext.current,
+            force: "websocket",
+          });
           return;
         }
         setError(humanizeError(details.message));
       } else {
-        setNotice("La discussion s'est coupée. Tu peux reprendre là où vous en étiez, ou terminer.");
+        setNotice(
+          "La discussion s'est coupée. Tu peux reprendre là où vous en étiez, ou terminer.",
+        );
       }
     },
     onError: (message) => setError(humanizeError(message)),
     onMessage: ({ role, message }) => {
-      if (role === "user" && pendingCommand.current && message.trim() === pendingCommand.current) {
+      if (
+        role === "user" &&
+        pendingCommand.current &&
+        message.trim() === pendingCommand.current
+      ) {
         pendingCommand.current = null;
         return;
       }
       if (role === "user") userTurns.current += 1;
       pushLine(role, message);
-      if (role === "agent" && liveRef.current?.kind === "test" && /test (is|est) (finished|over|termin)|test is done|fin du test/i.test(message)) {
-        if (autoFinishTimer.current) window.clearTimeout(autoFinishTimer.current);
-        autoFinishTimer.current = window.setTimeout(() => finishRef.current(), 6000);
+      if (
+        role === "agent" &&
+        liveRef.current?.kind === "test" &&
+        /test (is|est) (finished|over|termin)|test is done|fin du test/i.test(
+          message,
+        )
+      ) {
+        if (autoFinishTimer.current)
+          window.clearTimeout(autoFinishTimer.current);
+        autoFinishTimer.current = window.setTimeout(
+          () => finishRef.current(),
+          6000,
+        );
       }
     },
     onModeChange: ({ mode }) => {
@@ -295,8 +376,14 @@ function AppInner() {
     },
   });
 
-  const { status: elStatus, isSpeaking: elSpeaking, startSession, endSession: endElSession, sendUserMessage } = conversation;
-  const isEco = (live?.engine ?? engine) === "eco";
+  const {
+    status: elStatus,
+    isSpeaking: elSpeaking,
+    startSession,
+    endSession: endElSession,
+    sendUserMessage,
+  } = conversation;
+  const isEco = (live?.engine ?? engine) !== "elevenlabs";
   const status = isEco ? ecoStatus : elStatus;
   const isSpeaking = isEco ? ecoMode === "speaking" : elSpeaking;
   const endSession = useCallback(() => {
@@ -318,7 +405,8 @@ function AppInner() {
       if (connectAt.current == null) return;
       const secs = Math.floor((performance.now() - connectAt.current) / 1000);
       setElapsed(secs);
-      if (liveRef.current?.kind === "test" && secs >= TEST_MAX_SECONDS) finishRef.current();
+      if (liveRef.current?.kind === "test" && secs >= TEST_MAX_SECONDS)
+        finishRef.current();
     }, 1000);
     return () => clearInterval(id);
   }, [phase, connected]);
@@ -328,7 +416,12 @@ function AppInner() {
   }, [handsFree]);
 
   // Plafond du jour (dérivé, pas d'état). Le mode éco ne consomme pas de minutes.
-  const capReached = !isEco && Boolean(remote?.db) && remote != null && phase === "live" && remote.todayMinutes * 60 + elapsed >= remote.cost.dailyCapMinutes * 60;
+  const capReached =
+    !isEco &&
+    Boolean(remote?.db) &&
+    remote != null &&
+    phase === "live" &&
+    remote.todayMinutes * 60 + elapsed >= remote.cost.dailyCapMinutes * 60;
 
   // L'avatar respire au rythme de la voix.
   useEffect(() => {
@@ -336,7 +429,11 @@ function AppInner() {
     if (!connected || !orb) return;
     let frame = 0;
     const tick = () => {
-      const level = ecoRef.current ? ecoRef.current.getLevel() : isSpeaking ? conversation.getOutputVolume() : conversation.getInputVolume();
+      const level = ecoRef.current
+        ? ecoRef.current.getLevel()
+        : isSpeaking
+          ? conversation.getOutputVolume()
+          : conversation.getInputVolume();
       orb.style.transform = `scale(${(1 + Math.min(level, 1) * 0.12).toFixed(3)})`;
       frame = requestAnimationFrame(tick);
     };
@@ -359,19 +456,27 @@ function AppInner() {
     if (agentReady.current) return true;
     try {
       const res = await fetch("/api/elevenlabs/agent");
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+      };
       if (!res.ok) return true; // la route session donnera un message plus précis
       if (data.ok) {
         agentReady.current = true;
         return true;
       }
       const fix = await fetch("/api/elevenlabs/agent", { method: "POST" });
-      const fixed = (await fix.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      const fixed = (await fix.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+      };
       if (fix.ok && fixed.ok) {
         agentReady.current = true;
         return true;
       }
-      setError(`L'agent ElevenLabs n'accepte pas encore les réglages de l'app. ${fixed.error ?? ""} Ouvre Réglages pour voir ce qui manque.`.trim());
+      setError(
+        `L'agent ElevenLabs n'accepte pas encore les réglages de l'app. ${fixed.error ?? ""} Ouvre Réglages pour voir ce qui manque.`.trim(),
+      );
       return false;
     } catch {
       return true;
@@ -398,8 +503,19 @@ function AppInner() {
 
   const start = useCallback(
     async ({ params, context, force }: StartOptions) => {
-      const base: SessionParams = liveRef.current ?? { personality, language, correction, speed, topic: { title: null, own: true }, kind: "conversation" };
-      const p: SessionParams = { ...base, ...params, engine: params?.engine ?? base.engine ?? engine };
+      const base: SessionParams = liveRef.current ?? {
+        personality,
+        language,
+        correction,
+        speed,
+        topic: { title: null, own: true },
+        kind: "conversation",
+      };
+      const p: SessionParams = {
+        ...base,
+        ...params,
+        engine: params?.engine ?? base.engine ?? engine,
+      };
       liveRef.current = p;
       setLive(p);
       setError(null);
@@ -409,113 +525,158 @@ function AppInner() {
       }
       setPreparing(true);
       // Dans le geste d'appui : autorise le lecteur audio à démarrer tout seul ensuite (iPhone).
-      if (p.engine === "eco") unlockAudio();
+      if (p.engine !== "elevenlabs") unlockAudio();
       try {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
           stream.getTracks().forEach((t) => t.stop());
         } catch {
-          setError("Le micro est refusé. Autorise le micro pour ce site dans les réglages du navigateur, puis réessaie.");
+          setError(
+            "Le micro est refusé. Autorise le micro pour ce site dans les réglages du navigateur, puis réessaie.",
+          );
           return false;
         }
-        if (p.engine === "eco") {
+        if (p.engine === "eco" || p.engine === "live") {
           restarting.current = Boolean(context);
           ending.current = false;
           setEcoStatus("connecting");
-          const past = context ? transcriptRef.current.map((l) => ({ role: l.role, text: l.text })) : [];
-          let speaker = createSpeaker(voiceChoice, { language: p.language, personalityId: p.personality.id });
-          try {
-            if (speaker.choice === "kokoro") setNotice("Chargement de la voix Kokoro (90 Mo la première fois)…");
-            await speaker.preload((prog) => {
-              if (prog.status === "progress" && typeof prog.progress === "number") setNotice(`Chargement de la voix Kokoro : ${Math.round(prog.progress)} %`);
-            });
-            setNotice(null);
-          } catch (error) {
-            // Voix choisie indisponible : on continue avec ElevenLabs (ou le téléphone).
-            console.error("Voix indisponible", error);
-            speaker = createSpeaker("eleven", { language: p.language, personalityId: p.personality.id });
-            setNotice(`La voix ${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label ?? ""} n'a pas pu se charger : ElevenLabs prend le relais.`);
-          }
-          const eng = new EcoEngine({
-            speaker,
-            ear: earChoice,
-            body: {
-              personality: p.personality.id,
-              language: p.language,
-              correction: p.correction,
-              topic: p.topic.title,
-              ownTopic: p.topic.own,
-              memory: history.memoryFor(p.personality.id, p.personality.modeLabel),
-              kind: p.kind,
-              reviewWords: p.reviewWords,
-              rematch: p.rematch ?? null,
-              context: context ? { transcript: past } : undefined,
+          const past = context
+            ? transcriptRef.current.map((l) => ({ role: l.role, text: l.text }))
+            : [];
+          const body = {
+            personality: p.personality.id,
+            language: p.language,
+            correction: p.correction,
+            topic: p.topic.title,
+            ownTopic: p.topic.own,
+            memory: history.memoryFor(
+              p.personality.id,
+              p.personality.modeLabel,
+            ),
+            kind: p.kind,
+            reviewWords: p.reviewWords,
+            rematch: p.rematch ?? null,
+            context: context ? { transcript: past } : undefined,
+          };
+          const callbacks: EcoCallbacks = {
+            onConnect: () => {
+              everConnected.current = true;
+              setEcoStatus("connected");
+              setMuted(false);
+              setError(null);
+              setNotice(null);
+              if (!restarting.current) {
+                connectAt.current = performance.now();
+                userTalkMs.current = 0;
+                agentTalkMs.current = 0;
+                userTurns.current = 0;
+                setElapsed(0);
+                setTranscript([]);
+                transcriptRef.current = [];
+              }
+              restarting.current = false;
+              navigator.vibrate?.(30);
             },
+            onDisconnect: (details) => {
+              setEcoStatus("disconnected");
+              setEcoMode("idle");
+              setInterim("");
+              setAgentDraft(null);
+              setHolding(false);
+              if (agentSpeakStart.current != null) {
+                agentTalkMs.current +=
+                  performance.now() - agentSpeakStart.current;
+                agentSpeakStart.current = null;
+              }
+              if (ending.current || restarting.current) return;
+              if (details.reason === "error")
+                setError(details.message ?? "La discussion s'est coupée.");
+            },
+            onError: (message, options) => {
+              if (options?.fatal === false) showToast(message);
+              else setError(message);
+            },
+            onMessage: ({ role, message }) => {
+              if (role === "user") userTurns.current += 1;
+              pushLine(role, message);
+              if (
+                role === "agent" &&
+                liveRef.current?.kind === "test" &&
+                /test (is|est) (finished|over|termin)|test is done|fin du test/i.test(
+                  message,
+                )
+              ) {
+                if (autoFinishTimer.current)
+                  window.clearTimeout(autoFinishTimer.current);
+                autoFinishTimer.current = window.setTimeout(
+                  () => finishRef.current(),
+                  6000,
+                );
+              }
+            },
+            onModeChange: ({ mode }) => {
+              setEcoMode(mode);
+              if (mode !== "listening") setInterim("");
+              const now = performance.now();
+              if (mode === "speaking") {
+                agentSpeakStart.current = now;
+              } else if (agentSpeakStart.current != null) {
+                agentTalkMs.current += now - agentSpeakStart.current;
+                agentSpeakStart.current = null;
+              }
+            },
+            onInterim: (text) => setInterim(text),
+            onTiming: setTiming,
+            onDraft: setAgentDraft,
+          };
+          const common = {
+            body,
             language: p.language,
             rate: speedValue(p.speed),
             handsFree,
             history: past,
             firstMessage: context?.resumeMessage ?? null,
-            callbacks: {
-              onConnect: () => {
-                everConnected.current = true;
-                setEcoStatus("connected");
-                setMuted(false);
-                setError(null);
-                setNotice(null);
-                if (!restarting.current) {
-                  connectAt.current = performance.now();
-                  userTalkMs.current = 0;
-                  agentTalkMs.current = 0;
-                  userTurns.current = 0;
-                  setElapsed(0);
-                  setTranscript([]);
-                  transcriptRef.current = [];
-                }
-                restarting.current = false;
-                navigator.vibrate?.(30);
-              },
-              onDisconnect: (details) => {
-                setEcoStatus("disconnected");
-                setEcoMode("idle");
-                setInterim("");
-                setAgentDraft(null);
-                setHolding(false);
-                if (agentSpeakStart.current != null) {
-                  agentTalkMs.current += performance.now() - agentSpeakStart.current;
-                  agentSpeakStart.current = null;
-                }
-                if (ending.current || restarting.current) return;
-                if (details.reason === "error") setError(details.message ?? "La discussion s'est coupée.");
-              },
-              onError: (message, options) => {
-                if (options?.fatal === false) showToast(message);
-                else setError(message);
-              },
-              onMessage: ({ role, message }) => {
-                if (role === "user") userTurns.current += 1;
-                pushLine(role, message);
-                if (role === "agent" && liveRef.current?.kind === "test" && /test (is|est) (finished|over|termin)|test is done|fin du test/i.test(message)) {
-                  if (autoFinishTimer.current) window.clearTimeout(autoFinishTimer.current);
-                  autoFinishTimer.current = window.setTimeout(() => finishRef.current(), 6000);
-                }
-              },
-              onModeChange: ({ mode }) => {
-                setEcoMode(mode);
-                if (mode !== "listening") setInterim("");
-                const now = performance.now();
-                if (mode === "speaking") {
-                  agentSpeakStart.current = now;
-                } else if (agentSpeakStart.current != null) {
-                  agentTalkMs.current += now - agentSpeakStart.current;
-                  agentSpeakStart.current = null;
-                }
-              },
-              onInterim: (text) => setInterim(text),
-              onTiming: setTiming,
-              onDraft: setAgentDraft,
-            },
-          });
+            callbacks,
+          };
+          let eng: EcoEngine | LiveEngine;
+          if (p.engine === "live") {
+            // Temps réel : oreille, Claude et voix tournent sur le PC de Cherif ; le téléphone envoie le micro en continu.
+            eng = new LiveEngine(common);
+          } else {
+            let speaker = createSpeaker(voiceChoice, {
+              language: p.language,
+              personalityId: p.personality.id,
+            });
+            try {
+              if (speaker.choice === "kokoro")
+                setNotice(
+                  "Chargement de la voix Kokoro (90 Mo la première fois)…",
+                );
+              await speaker.preload((prog) => {
+                if (
+                  prog.status === "progress" &&
+                  typeof prog.progress === "number"
+                )
+                  setNotice(
+                    `Chargement de la voix Kokoro : ${Math.round(prog.progress)} %`,
+                  );
+              });
+              setNotice(null);
+            } catch (error) {
+              // Voix choisie indisponible : on continue avec ElevenLabs (ou le téléphone).
+              console.error("Voix indisponible", error);
+              speaker = createSpeaker("eleven", {
+                language: p.language,
+                personalityId: p.personality.id,
+              });
+              setNotice(
+                `La voix ${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label ?? ""} n'a pas pu se charger : ElevenLabs prend le relais.`,
+              );
+            }
+            eng = new EcoEngine({ ...common, speaker, ear: earChoice });
+          }
           ecoRef.current = eng;
           const ok = await eng.start();
           if (!ok) {
@@ -541,13 +702,22 @@ function AppInner() {
             speed: p.speed,
             topic: p.topic.title,
             ownTopic: p.topic.own,
-            memory: history.memoryFor(p.personality.id, p.personality.modeLabel),
+            memory: history.memoryFor(
+              p.personality.id,
+              p.personality.modeLabel,
+            ),
             kind: p.kind,
             reviewWords: p.reviewWords,
             rematch: p.rematch ?? null,
             connectionType: type,
             context: context
-              ? { resumeMessage: context.resumeMessage, transcript: transcriptRef.current.map((l) => ({ role: l.role, text: l.text })) }
+              ? {
+                  resumeMessage: context.resumeMessage,
+                  transcript: transcriptRef.current.map((l) => ({
+                    role: l.role,
+                    text: l.text,
+                  })),
+                }
               : undefined,
           }),
         });
@@ -559,15 +729,26 @@ function AppInner() {
           overrides?: Record<string, unknown>;
         };
         if (!res.ok) {
-          setError(data.error ?? "Le serveur n'a pas répondu. Réessaie dans un instant.");
+          setError(
+            data.error ??
+              "Le serveur n'a pas répondu. Réessaie dans un instant.",
+          );
           return false;
         }
         restarting.current = Boolean(context);
         ending.current = false;
         if (data.connectionType === "websocket" && data.signedUrl) {
-          startSession({ signedUrl: data.signedUrl, connectionType: "websocket", overrides: data.overrides });
+          startSession({
+            signedUrl: data.signedUrl,
+            connectionType: "websocket",
+            overrides: data.overrides,
+          });
         } else if (data.conversationToken) {
-          startSession({ conversationToken: data.conversationToken, connectionType: "webrtc", overrides: data.overrides });
+          startSession({
+            conversationToken: data.conversationToken,
+            connectionType: "webrtc",
+            overrides: data.overrides,
+          });
         } else {
           setError("Réponse du serveur incomplète. Réessaie.");
           return false;
@@ -580,7 +761,23 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine, voiceChoice, earChoice, showToast],
+    [
+      personality,
+      language,
+      correction,
+      speed,
+      connectionType,
+      startSession,
+      ensureAgentConfigured,
+      ensureFrenchVoices,
+      history,
+      engine,
+      handsFree,
+      pushLine,
+      voiceChoice,
+      earChoice,
+      showToast,
+    ],
   );
 
   useEffect(() => {
@@ -605,7 +802,12 @@ function AppInner() {
   /** Lance une séance, après un avertissement si le plafond du jour est atteint. */
   const begin = useCallback(
     (params: Partial<SessionParams>) => {
-      if (remote && remote.db && (params.engine ?? engine) !== "eco" && remote.todayMinutes >= remote.cost.dailyCapMinutes) {
+      if (
+        remote &&
+        remote.db &&
+        (params.engine ?? engine) === "elevenlabs" &&
+        remote.todayMinutes >= remote.cost.dailyCapMinutes
+      ) {
         setCapPrompt(params);
         return;
       }
@@ -624,7 +826,9 @@ function AppInner() {
     window.history.replaceState(null, "", "/");
     let words: ReviewWord[] = [];
     try {
-      words = JSON.parse(sessionStorage.getItem(REVISION_STORAGE_KEY) ?? "[]") as ReviewWord[];
+      words = JSON.parse(
+        sessionStorage.getItem(REVISION_STORAGE_KEY) ?? "[]",
+      ) as ReviewWord[];
     } catch {
       words = [];
     }
@@ -632,7 +836,16 @@ function AppInner() {
     const lang: Language = params.get("lang") === "fr" ? "fr" : "en";
     const prof = findPersonality("prof") ?? personality;
     const id = window.setTimeout(
-      () => launch({ personality: prof, language: lang, correction: "legere", speed, topic: { title: null, own: false }, kind: "revision", reviewWords: words }),
+      () =>
+        launch({
+          personality: prof,
+          language: lang,
+          correction: "legere",
+          speed,
+          topic: { title: null, own: false },
+          kind: "revision",
+          reviewWords: words,
+        }),
       50,
     );
     return () => window.clearTimeout(id);
@@ -642,7 +855,9 @@ function AppInner() {
   const restart = useCallback(
     async (params: Partial<SessionParams>, resumeMessage: string) => {
       if (!connected) {
-        liveRef.current = liveRef.current ? { ...liveRef.current, ...params } : null;
+        liveRef.current = liveRef.current
+          ? { ...liveRef.current, ...params }
+          : null;
         if (liveRef.current) setLive(liveRef.current);
         return;
       }
@@ -661,7 +876,8 @@ function AppInner() {
       const eco = ecoRef.current;
       if (eco && !eco.pushToTalk(next)) {
         // Le personnage prépare sa réponse : l'appui ne lance pas d'écoute, on le dit.
-        if (next) showToast("Attends une seconde : le personnage prépare sa réponse.");
+        if (next)
+          showToast("Attends une seconde : le personnage prépare sa réponse.");
         return;
       }
       setHolding(next);
@@ -682,20 +898,34 @@ function AppInner() {
 
   const cycleSpeed = useCallback(() => {
     const current = liveRef.current?.speed ?? speed;
-    const next = SPEED_ORDER[(SPEED_ORDER.indexOf(current) + 1) % SPEED_ORDER.length];
+    const next =
+      SPEED_ORDER[(SPEED_ORDER.indexOf(current) + 1) % SPEED_ORDER.length];
     setSavedSpeed(next);
-    void restart({ speed: next }, SPEED_RESUME_MESSAGES[liveRef.current?.language ?? language][next]);
+    void restart(
+      { speed: next },
+      SPEED_RESUME_MESSAGES[liveRef.current?.language ?? language][next],
+    );
   }, [speed, language, setSavedSpeed, restart]);
 
   const cycleCorrection = useCallback(() => {
     const current = liveRef.current?.correction ?? correction;
-    const next = CORRECTION_ORDER[(CORRECTION_ORDER.indexOf(current) + 1) % CORRECTION_ORDER.length];
+    const next =
+      CORRECTION_ORDER[
+        (CORRECTION_ORDER.indexOf(current) + 1) % CORRECTION_ORDER.length
+      ];
     setSavedCorrection(next);
-    void restart({ correction: next }, RESUME_AFTER_CORRECTION[liveRef.current?.language ?? language]);
+    void restart(
+      { correction: next },
+      RESUME_AFTER_CORRECTION[liveRef.current?.language ?? language],
+    );
   }, [correction, language, setSavedCorrection, restart]);
 
   const resume = useCallback(() => {
-    void start({ context: { resumeMessage: RESUME_AFTER_DROP[liveRef.current?.language ?? language] } });
+    void start({
+      context: {
+        resumeMessage: RESUME_AFTER_DROP[liveRef.current?.language ?? language],
+      },
+    });
   }, [start, language]);
 
   const finish = useCallback(async () => {
@@ -714,22 +944,39 @@ function AppInner() {
     navigator.vibrate?.([20, 40, 20]);
 
     const p = liveRef.current;
-    const seconds = connectAt.current != null ? Math.round((performance.now() - connectAt.current) / 1000) : 0;
+    const seconds =
+      connectAt.current != null
+        ? Math.round((performance.now() - connectAt.current) / 1000)
+        : 0;
     // Si la détection de voix n'a rien remonté (cas WebRTC), on estime le
     // temps de parole à partir du nombre de mots prononcés.
     const wordsOf = (role: "user" | "agent") =>
-      transcriptRef.current.filter((l) => l.role === role).reduce((n, l) => n + l.text.split(/\s+/).filter(Boolean).length, 0);
-    const userMs = userTalkMs.current > 0 ? userTalkMs.current : wordsOf("user") * 450;
-    const agentMs = agentTalkMs.current > 0 ? agentTalkMs.current : wordsOf("agent") * 380;
+      transcriptRef.current
+        .filter((l) => l.role === role)
+        .reduce((n, l) => n + l.text.split(/\s+/).filter(Boolean).length, 0);
+    const userMs =
+      userTalkMs.current > 0 ? userTalkMs.current : wordsOf("user") * 450;
+    const agentMs =
+      agentTalkMs.current > 0 ? agentTalkMs.current : wordsOf("agent") * 380;
     const total = userMs + agentMs;
     const userShare = total > 0 ? Math.round((userMs / total) * 100) : 0;
-    const recorded = seconds >= 30 ? progress.recordSession(seconds) : { streak: progress.streak, minutesToday: progress.minutesToday };
+    const recorded =
+      seconds >= 30
+        ? progress.recordSession(seconds)
+        : { streak: progress.streak, minutesToday: progress.minutesToday };
     if (p && seconds >= 30) {
       history.add({
-        date: new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "long" }),
+        date: new Date().toLocaleDateString("fr-FR", {
+          day: "numeric",
+          month: "long",
+        }),
         personality: p.personality.id,
         language: p.language,
-        topic: p.topic.title ?? (p.language === "en" ? "a topic Cherif chose" : "un sujet choisi par Cherif"),
+        topic:
+          p.topic.title ??
+          (p.language === "en"
+            ? "a topic Cherif chose"
+            : "un sujet choisi par Cherif"),
         seconds,
       });
     }
@@ -756,14 +1003,30 @@ function AppInner() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ transcript: plain, language: p.language }),
           });
-          const data = (await res.json().catch(() => ({}))) as LevelInfo & { error?: string };
-          level = res.ok ? data : { level: "", date: "", summary: "", strengths: [], toWorkOn: [], error: data.error ?? "L'évaluation a échoué." };
+          const data = (await res.json().catch(() => ({}))) as LevelInfo & {
+            error?: string;
+          };
+          level = res.ok
+            ? data
+            : {
+                level: "",
+                date: "",
+                summary: "",
+                strengths: [],
+                toWorkOn: [],
+                error: data.error ?? "L'évaluation a échoué.",
+              };
           setLevelResult(level);
         } else {
           const res = await fetch("/api/bilan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ transcript: plain, durationSeconds: seconds, personality: p.personality.id, language: p.language }),
+            body: JSON.stringify({
+              transcript: plain,
+              durationSeconds: seconds,
+              personality: p.personality.id,
+              language: p.language,
+            }),
           });
           if (res.ok) {
             result = (await res.json()) as BilanResult;
@@ -795,15 +1058,23 @@ function AppInner() {
             errors: result?.errors ?? [],
             words: [
               ...(result?.words ?? []),
-              ...(result?.upgrades ?? []).map((u) => ({ en: u.better, fr: `plutôt que « ${u.used} »` })),
+              ...(result?.upgrades ?? []).map((u) => ({
+                en: u.better,
+                fr: `plutôt que « ${u.used} »`,
+              })),
             ],
             encouragement: result?.encouragement ?? null,
             level: level?.level || null,
             observedLevel: result?.level ?? null,
           }),
         });
-        const data = (await res.json().catch(() => ({}))) as { saved?: boolean; costFcfa?: number; progression?: Progression | null };
-        if (data.saved && typeof data.costFcfa === "number") setSavedCost(data.costFcfa);
+        const data = (await res.json().catch(() => ({}))) as {
+          saved?: boolean;
+          costFcfa?: number;
+          progression?: Progression | null;
+        };
+        if (data.saved && typeof data.costFcfa === "number")
+          setSavedCost(data.costFcfa);
         if (data.saved) setProgression(data.progression ?? null);
       } catch {
         // la séance reste dans l'historique du téléphone
@@ -836,32 +1107,48 @@ function AppInner() {
       <>
         {capSheet}
         <HomeScreen
-        language={language}
-        onLanguageChange={setSavedLanguage}
-        personality={personality}
-        onModeChange={setSavedMode}
-        speed={speed}
-        onSpeedChange={setSavedSpeed}
-        talkMode={talkMode}
-        onTalkModeChange={setSavedTalkMode}
-        engine={engine}
-        onEngineChange={setSavedEngine}
-        voiceChoice={voiceChoice}
-        onVoiceChoiceChange={setSavedVoiceChoice}
-        earChoice={earChoice}
-        onEarChoiceChange={setSavedEarChoice}
-        streak={remote?.db && remote.streak != null ? Math.max(remote.streak, progress.streak) : progress.streak}
-        minutesToday={remote?.db ? Math.max(remote.todayMinutes, progress.minutesToday) : progress.minutesToday}
-        goalMinutes={progress.goalMinutes}
-        onStart={() => setPhase("topic")}
-        level={currentLevel?.level ?? null}
-        needsTest={needsTest}
-        onTest={() =>
-          begin({ personality: findPersonality("prof") ?? personality, language, correction: "aucune", speed, topic: { title: null, own: false }, kind: "test" })
-        }
-        dueWords={remote?.dueWords ?? 0}
-        dbReady={Boolean(remote?.db)}
-      />
+          language={language}
+          onLanguageChange={setSavedLanguage}
+          personality={personality}
+          onModeChange={setSavedMode}
+          speed={speed}
+          onSpeedChange={setSavedSpeed}
+          talkMode={talkMode}
+          onTalkModeChange={setSavedTalkMode}
+          engine={engine}
+          onEngineChange={setSavedEngine}
+          voiceChoice={voiceChoice}
+          onVoiceChoiceChange={setSavedVoiceChoice}
+          earChoice={earChoice}
+          onEarChoiceChange={setSavedEarChoice}
+          pcReady={Boolean(remote?.pc?.configured)}
+          streak={
+            remote?.db && remote.streak != null
+              ? Math.max(remote.streak, progress.streak)
+              : progress.streak
+          }
+          minutesToday={
+            remote?.db
+              ? Math.max(remote.todayMinutes, progress.minutesToday)
+              : progress.minutesToday
+          }
+          goalMinutes={progress.goalMinutes}
+          onStart={() => setPhase("topic")}
+          level={currentLevel?.level ?? null}
+          needsTest={needsTest}
+          onTest={() =>
+            begin({
+              personality: findPersonality("prof") ?? personality,
+              language,
+              correction: "aucune",
+              speed,
+              topic: { title: null, own: false },
+              kind: "test",
+            })
+          }
+          dueWords={remote?.dueWords ?? 0}
+          dbReady={Boolean(remote?.db)}
+        />
       </>
     );
   }
@@ -871,12 +1158,21 @@ function AppInner() {
       <>
         {capSheet}
         <TopicScreen
-        personality={personality}
-        language={language}
-        recent={history.recentTopics(personality.id, language)}
-        onBack={() => setPhase("home")}
-        onPick={(topic) => begin({ personality, language, correction, speed, topic, kind: "conversation" })}
-      />
+          personality={personality}
+          language={language}
+          recent={history.recentTopics(personality.id, language)}
+          onBack={() => setPhase("home")}
+          onPick={(topic) =>
+            begin({
+              personality,
+              language,
+              correction,
+              speed,
+              topic,
+              kind: "conversation",
+            })
+          }
+        />
       </>
     );
   }
@@ -886,34 +1182,56 @@ function AppInner() {
       <>
         {capSheet}
         <BilanScreen
-        summary={summary}
-        bilan={bilan}
-        loading={bilanLoading}
-        personality={live?.personality ?? personality}
-        language={live?.language ?? language}
-        kind={live?.kind ?? "conversation"}
-        levelResult={levelResult}
-        transcript={transcript}
-        costFcfa={savedCost}
-        progression={progression}
-        onAgain={() => setPhase("topic")}
-        onHome={() => setPhase("home")}
-        onRematch={(rematch) => {
-          const base = live ?? { personality, language, correction, speed, topic: { title: null, own: false }, kind: "conversation" as SessionKind };
-          begin({ ...base, kind: "conversation", rematch });
-        }}
-        onTeacher={(focus) => {
-          const prof = findPersonality("prof") ?? personality;
-          setSavedMode(prof.id);
-          begin({ personality: prof, language: live?.language ?? language, correction: "active", speed, topic: { title: focus, own: false }, kind: "conversation" });
-        }}
-      />
+          summary={summary}
+          bilan={bilan}
+          loading={bilanLoading}
+          personality={live?.personality ?? personality}
+          language={live?.language ?? language}
+          kind={live?.kind ?? "conversation"}
+          levelResult={levelResult}
+          transcript={transcript}
+          costFcfa={savedCost}
+          progression={progression}
+          onAgain={() => setPhase("topic")}
+          onHome={() => setPhase("home")}
+          onRematch={(rematch) => {
+            const base = live ?? {
+              personality,
+              language,
+              correction,
+              speed,
+              topic: { title: null, own: false },
+              kind: "conversation" as SessionKind,
+            };
+            begin({ ...base, kind: "conversation", rematch });
+          }}
+          onTeacher={(focus) => {
+            const prof = findPersonality("prof") ?? personality;
+            setSavedMode(prof.id);
+            begin({
+              personality: prof,
+              language: live?.language ?? language,
+              correction: "active",
+              speed,
+              topic: { title: focus, own: false },
+              kind: "conversation",
+            });
+          }}
+        />
       </>
     );
   }
 
-  const p = live ?? { personality, language, correction, speed, topic: { title: null, own: true }, kind: "conversation" as SessionKind };
-  const displayName = p.personality.id === "situation" ? "Ton partenaire" : p.personality.name;
+  const p = live ?? {
+    personality,
+    language,
+    correction,
+    speed,
+    topic: { title: null, own: true },
+    kind: "conversation" as SessionKind,
+  };
+  const displayName =
+    p.personality.id === "situation" ? "Ton partenaire" : p.personality.name;
 
   const statusLabel = error
     ? null
@@ -932,10 +1250,10 @@ function AppInner() {
                 : isEco && interim
                   ? `« ${interim} »`
                   : handsFree
-                ? muted
-                  ? "Micro coupé"
-                  : "Je t'écoute, parle quand tu veux"
-                : "À toi de parler";
+                    ? muted
+                      ? "Micro coupé"
+                      : "Je t'écoute, parle quand tu veux"
+                    : "À toi de parler";
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -948,38 +1266,68 @@ function AppInner() {
           <div className="flex flex-col">
             <span className="text-base font-bold">{displayName}</span>
             <span className="text-xs text-muted">
-              {p.kind === "test" ? "Test de niveau" : p.kind === "revision" ? "Révision de vocabulaire" : p.personality.modeLabel} · {LANGUAGE_LABELS[p.language].toLowerCase()}
+              {p.kind === "test"
+                ? "Test de niveau"
+                : p.kind === "revision"
+                  ? "Révision de vocabulaire"
+                  : p.personality.modeLabel}{" "}
+              · {LANGUAGE_LABELS[p.language].toLowerCase()}
               {p.topic.title ? ` · ${p.topic.title}` : ""}
-              {isEco ? ` · éco (${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label.split(" ")[0] ?? "voix"})` : ""}
+              {isEco
+                ? (live?.engine ?? engine) === "live"
+                  ? " · temps réel (mon PC)"
+                  : ` · éco (${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label.split(" ")[0] ?? "voix"})`
+                : ""}
             </span>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="font-mono text-sm text-muted tabular-nums">{formatClock(elapsed)}</span>
-          <button type="button" onClick={finish} className="h-10 rounded-xl bg-danger/15 px-4 text-sm font-semibold text-danger">
+          <span className="font-mono text-sm text-muted tabular-nums">
+            {formatClock(elapsed)}
+          </span>
+          <button
+            type="button"
+            onClick={finish}
+            className="h-10 rounded-xl bg-danger/15 px-4 text-sm font-semibold text-danger"
+          >
             Terminer
           </button>
         </div>
       </header>
 
       {toast && (
-        <p role="status" className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening">
+        <p
+          role="status"
+          className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening"
+        >
           {toast}
         </p>
       )}
       {capReached && (
         <p className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening">
-          Plafond du jour atteint ({remote?.cost.dailyCapMinutes ?? 30} min). Tu peux terminer quand tu veux.
+          Plafond du jour atteint ({remote?.cost.dailyCapMinutes ?? 30} min). Tu
+          peux terminer quand tu veux.
         </p>
       )}
       <section className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
         <div
           ref={orbRef}
           className={`grid place-items-center rounded-full p-5 transition-colors duration-300 ${
-            connected ? (isSpeaking ? "bg-speaking/15" : holding ? "bg-listening/20" : "bg-accent-soft") : "bg-accent-soft"
+            connected
+              ? isSpeaking
+                ? "bg-speaking/15"
+                : holding
+                  ? "bg-listening/20"
+                  : "bg-accent-soft"
+              : "bg-accent-soft"
           }`}
         >
-          <PersonaAvatar style={p.personality.avatar} size={showText ? 96 : 170} speaking={isSpeaking} label={displayName} />
+          <PersonaAvatar
+            style={p.personality.avatar}
+            size={showText ? 96 : 170}
+            speaking={isSpeaking}
+            label={displayName}
+          />
         </div>
         {statusLabel && (
           <p className="text-xl font-semibold" role="status" aria-live="polite">
@@ -1003,12 +1351,21 @@ function AppInner() {
         )}
         {error && (
           <div className="flex flex-col items-center gap-3">
-            <p className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</p>
+            <p className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
+              {error}
+            </p>
             <div className="flex gap-2">
-              <button type="button" onClick={() => start({})} className="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-contrast">
+              <button
+                type="button"
+                onClick={() => start({})}
+                className="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-contrast"
+              >
                 Réessayer
               </button>
-              <Link href="/reglages" className="h-11 rounded-xl border border-line bg-elevated px-5 text-sm font-semibold leading-[44px]">
+              <Link
+                href="/reglages"
+                className="h-11 rounded-xl border border-line bg-elevated px-5 text-sm font-semibold leading-[44px]"
+              >
                 Réglages
               </Link>
             </div>
@@ -1018,7 +1375,11 @@ function AppInner() {
           <div className="flex flex-col items-center gap-3">
             <p className="max-w-xs text-sm text-muted">{notice}</p>
             {!busy && (
-              <button type="button" onClick={resume} className="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-contrast">
+              <button
+                type="button"
+                onClick={resume}
+                className="h-11 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-contrast"
+              >
                 Reprendre
               </button>
             )}
@@ -1040,7 +1401,9 @@ function AppInner() {
           className="flex max-h-64 min-h-24 flex-col gap-2 overflow-y-auto rounded-2xl border border-line bg-elevated p-3"
         >
           {transcript.length === 0 && !agentDraft ? (
-            <p className="text-center text-sm text-muted">Le texte de la conversation s&apos;affichera ici.</p>
+            <p className="text-center text-sm text-muted">
+              Le texte de la conversation s&apos;affichera ici.
+            </p>
           ) : (
             transcript.map((line) => (
               <p
@@ -1052,7 +1415,10 @@ function AppInner() {
             ))
           )}
           {agentDraft && (
-            <p aria-live="polite" className="max-w-[85%] self-start rounded-2xl bg-accent-soft px-3 py-2 text-sm opacity-70">
+            <p
+              aria-live="polite"
+              className="max-w-[85%] self-start rounded-2xl bg-accent-soft px-3 py-2 text-sm opacity-70"
+            >
               {agentDraft}
             </p>
           )}
@@ -1064,19 +1430,31 @@ function AppInner() {
           <path d="M3 12a9 9 0 1 0 3-6.7" />
           <path d="M3 4v5h5" />
         </ToolButton>
-        <ToolButton label={SPEEDS.find((s) => s.key === p.speed)?.label ?? "Normal"} sublabel="Vitesse" onClick={cycleSpeed} disabled={busy}>
+        <ToolButton
+          label={SPEEDS.find((s) => s.key === p.speed)?.label ?? "Normal"}
+          sublabel="Vitesse"
+          onClick={cycleSpeed}
+          disabled={busy}
+        >
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7v5l3 2" />
         </ToolButton>
         <ToolButton
-          label={CORRECTION_LEVELS.find((c) => c.key === p.correction)?.short ?? "Aucune"}
+          label={
+            CORRECTION_LEVELS.find((c) => c.key === p.correction)?.short ??
+            "Aucune"
+          }
           sublabel="Correction"
           onClick={cycleCorrection}
           disabled={busy}
         >
           <path d="M20 6 9 17l-5-5" />
         </ToolButton>
-        <ToolButton label={showText ? "Masquer" : "Texte"} onClick={() => setSavedShowText(showText ? "0" : "1")} pressed={showText}>
+        <ToolButton
+          label={showText ? "Masquer" : "Texte"}
+          onClick={() => setSavedShowText(showText ? "0" : "1")}
+          pressed={showText}
+        >
           <path d="M4 6h16M4 12h10M4 18h14" />
         </ToolButton>
       </section>
@@ -1099,7 +1477,12 @@ function AppInner() {
           }}
         />
       ) : (
-        <PushToTalkButton holding={holding} disabled={!connected} interrupting={isSpeaking} onHoldChange={onHoldChange} />
+        <PushToTalkButton
+          holding={holding}
+          disabled={!connected}
+          interrupting={isSpeaking}
+          onHoldChange={onHoldChange}
+        />
       )}
       <button
         type="button"
@@ -1110,20 +1493,36 @@ function AppInner() {
         }}
         className="mx-auto text-xs text-muted underline"
       >
-        {handsFree ? "Passer en appui pour parler (endroit bruyant)" : "Passer en mains libres"}
+        {handsFree
+          ? "Passer en appui pour parler (endroit bruyant)"
+          : "Passer en mains libres"}
       </button>
     </main>
   );
 }
 
-function HandsFreeMic({ muted, disabled, speaking, onToggle }: { muted: boolean; disabled: boolean; speaking: boolean; onToggle: () => void }) {
+function HandsFreeMic({
+  muted,
+  disabled,
+  speaking,
+  onToggle,
+}: {
+  muted: boolean;
+  disabled: boolean;
+  speaking: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="flex flex-col items-center gap-2 select-none">
       <button
         type="button"
         disabled={disabled}
         aria-pressed={!muted}
-        aria-label={muted ? "Micro coupé, appuie pour le rouvrir" : "Micro ouvert, appuie pour le couper"}
+        aria-label={
+          muted
+            ? "Micro coupé, appuie pour le rouvrir"
+            : "Micro ouvert, appuie pour le couper"
+        }
         onClick={onToggle}
         className={`grid h-28 w-28 place-items-center rounded-full transition-all duration-150 disabled:opacity-50 ${
           muted
@@ -1133,13 +1532,25 @@ function HandsFreeMic({ muted, disabled, speaking, onToggle }: { muted: boolean;
               : "bg-listening text-fg shadow-[0_0_0_14px_rgba(255,160,92,0.22)] animate-breathe"
         }`}
       >
-        <svg aria-hidden="true" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          aria-hidden="true"
+          width="48"
+          height="48"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <rect x="9" y="3" width="6" height="11" rx="3" />
           <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
           {muted && <path d="M4 4l16 16" />}
         </svg>
       </button>
-      <span className="text-sm font-semibold text-muted">{muted ? "Micro coupé" : "Micro ouvert"}</span>
+      <span className="text-sm font-semibold text-muted">
+        {muted ? "Micro coupé" : "Micro ouvert"}
+      </span>
     </div>
   );
 }
@@ -1167,10 +1578,22 @@ function ToolButton({
       aria-pressed={pressed}
       aria-label={sublabel ? `${sublabel} : ${label}` : label}
       className={`flex h-16 flex-col items-center justify-center gap-0.5 rounded-2xl border text-[11px] font-medium leading-tight disabled:opacity-50 ${
-        pressed ? "border-accent bg-accent-soft text-accent" : "border-line bg-elevated"
+        pressed
+          ? "border-accent bg-accent-soft text-accent"
+          : "border-line bg-elevated"
       }`}
     >
-      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        aria-hidden="true"
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         {children}
       </svg>
       {sublabel && <span className="text-[10px] text-muted">{sublabel}</span>}
@@ -1194,6 +1617,7 @@ function HomeScreen({
   onVoiceChoiceChange,
   earChoice,
   onEarChoiceChange,
+  pcReady,
   streak,
   minutesToday,
   goalMinutes,
@@ -1218,6 +1642,8 @@ function HomeScreen({
   onVoiceChoiceChange: (v: VoiceChoice) => void;
   earChoice: EarChoice;
   onEarChoiceChange: (e: EarChoice) => void;
+  /** Le PC de Cherif est configuré (voix et oreille locales, mode temps réel). */
+  pcReady: boolean;
   streak: number;
   minutesToday: number;
   goalMinutes: number;
@@ -1229,20 +1655,39 @@ function HomeScreen({
   dbReady: boolean;
 }) {
   const today = useToday();
-  const dateLabel = today ? today.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) : "";
+  const dateLabel = today
+    ? today.toLocaleDateString("fr-FR", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+      })
+    : "";
   const greeting = personality.ownTopicMessages[language];
   const pct = Math.min(100, Math.round((minutesToday / goalMinutes) * 100));
-  const displayName = personality.id === "situation" ? personality.modeLabel : personality.name;
+  const displayName =
+    personality.id === "situation" ? personality.modeLabel : personality.name;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between">
         <div>
-          <p className="text-sm text-muted first-letter:uppercase">{dateLabel}</p>
+          <p className="text-sm text-muted first-letter:uppercase">
+            {dateLabel}
+          </p>
           <h1 className="text-2xl font-bold">Salut Cherif !</h1>
         </div>
         <div className="flex items-center gap-1.5 rounded-full bg-listening/15 px-3 py-2 text-sm font-semibold text-listening">
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            aria-hidden="true"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M12 2c1 4 5 6 5 11a5 5 0 0 1-10 0c0-2 1-3 1-3s1 2 2 2c0-4 2-7 2-10z" />
           </svg>
           <span>
@@ -1259,7 +1704,10 @@ function HomeScreen({
           </span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-accent-soft">
-          <div className="h-2 rounded-full bg-accent transition-all" style={{ width: `${Math.max(4, pct)}%` }} />
+          <div
+            className="h-2 rounded-full bg-accent transition-all"
+            style={{ width: `${Math.max(4, pct)}%` }}
+          />
         </div>
       </section>
 
@@ -1272,19 +1720,35 @@ function HomeScreen({
               className="flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-accent-soft px-4 py-3 text-left"
             >
               <span className="flex flex-col">
-                <span className="text-sm font-semibold">{level ? `Refaire le test de niveau (${LANGUAGE_LABELS[language].toLowerCase()})` : `Test de niveau en ${LANGUAGE_LABELS[language].toLowerCase()}`}</span>
-                <span className="text-xs text-muted">{level ? `Niveau actuel ${level}, à réévaluer ce mois-ci. 5 minutes avec Emma.` : "5 minutes de discussion avec Emma pour situer ton niveau (A1 à C2)."}</span>
+                <span className="text-sm font-semibold">
+                  {level
+                    ? `Refaire le test de niveau (${LANGUAGE_LABELS[language].toLowerCase()})`
+                    : `Test de niveau en ${LANGUAGE_LABELS[language].toLowerCase()}`}
+                </span>
+                <span className="text-xs text-muted">
+                  {level
+                    ? `Niveau actuel ${level}, à réévaluer ce mois-ci. 5 minutes avec Emma.`
+                    : "5 minutes de discussion avec Emma pour situer ton niveau (A1 à C2)."}
+                </span>
               </span>
-              <span className="rounded-full bg-accent px-3 py-1.5 text-xs font-bold text-accent-contrast">5 min</span>
+              <span className="rounded-full bg-accent px-3 py-1.5 text-xs font-bold text-accent-contrast">
+                5 min
+              </span>
             </button>
           )}
           {dueWords > 0 && (
-            <Link href="/carnet" className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-elevated px-4 py-3">
+            <Link
+              href="/carnet"
+              className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-elevated px-4 py-3"
+            >
               <span className="flex flex-col">
                 <span className="text-sm font-semibold">
                   {dueWords} mot{dueWords > 1 ? "s" : ""} à réviser
                 </span>
-                <span className="text-xs text-muted">Deux minutes dans le carnet, ou une révision à la voix avec Emma.</span>
+                <span className="text-xs text-muted">
+                  Deux minutes dans le carnet, ou une révision à la voix avec
+                  Emma.
+                </span>
               </span>
               <span className="text-xl text-muted" aria-hidden>
                 ›
@@ -1295,7 +1759,11 @@ function HomeScreen({
       )}
 
       <section className="flex flex-col gap-2">
-        <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-line bg-elevated p-1" role="radiogroup" aria-label="Langue">
+        <div
+          className="grid grid-cols-2 gap-1.5 rounded-2xl border border-line bg-elevated p-1"
+          role="radiogroup"
+          aria-label="Langue"
+        >
           {(["en", "fr"] as Language[]).map((l) => (
             <button
               key={l}
@@ -1309,7 +1777,11 @@ function HomeScreen({
             </button>
           ))}
         </div>
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 py-1" role="radiogroup" aria-label="Mode">
+        <div
+          className="-mx-4 flex gap-2 overflow-x-auto px-4 py-1"
+          role="radiogroup"
+          aria-label="Mode"
+        >
           {PERSONALITIES.map((pers) => {
             const selected = pers.id === personality.id;
             return (
@@ -1320,10 +1792,16 @@ function HomeScreen({
                 aria-checked={selected}
                 onClick={() => onModeChange(pers.id)}
                 className={`flex shrink-0 flex-col items-center gap-1 rounded-2xl border px-3 py-2 text-xs font-medium ${
-                  selected ? "border-accent bg-accent-soft text-accent" : "border-line bg-elevated text-muted"
+                  selected
+                    ? "border-accent bg-accent-soft text-accent"
+                    : "border-line bg-elevated text-muted"
                 }`}
               >
-                <PersonaAvatar style={pers.avatar} size={44} label={pers.name} />
+                <PersonaAvatar
+                  style={pers.avatar}
+                  size={44}
+                  label={pers.name}
+                />
                 <span>{pers.modeLabel}</span>
               </button>
             );
@@ -1332,24 +1810,40 @@ function HomeScreen({
       </section>
 
       <section className="flex flex-1 flex-col items-center justify-center gap-3 rounded-3xl border border-line bg-elevated p-5 text-center">
-        <PersonaAvatar style={personality.avatar} size={130} label={displayName} />
+        <PersonaAvatar
+          style={personality.avatar}
+          size={130}
+          label={displayName}
+        />
         <div>
           <p className="text-xl font-bold">{displayName}</p>
           <p className="text-sm text-muted">{personality.tagline}</p>
         </div>
-        <p className="max-w-xs rounded-2xl bg-accent-soft px-4 py-3 text-sm leading-snug">{greeting}</p>
+        <p className="max-w-xs rounded-2xl bg-accent-soft px-4 py-3 text-sm leading-snug">
+          {greeting}
+        </p>
       </section>
 
       <details className="rounded-2xl border border-line bg-elevated px-4 py-3">
         <summary className="cursor-pointer text-sm font-semibold">
           Micro et vitesse{" "}
           <span className="font-normal text-muted">
-            · {talkMode === "mains-libres" ? "mains libres" : "appui pour parler"} · {SPEEDS.find((s) => s.key === speed)?.label.toLowerCase()}
-            {engine === "eco" ? " · éco" : ""}
+            ·{" "}
+            {talkMode === "mains-libres" ? "mains libres" : "appui pour parler"}{" "}
+            · {SPEEDS.find((s) => s.key === speed)?.label.toLowerCase()}
+            {engine === "eco"
+              ? " · éco"
+              : engine === "live"
+                ? " · temps réel"
+                : ""}
           </span>
         </summary>
         <div className="mt-3 flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Façon de parler">
+          <div
+            className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
+            role="radiogroup"
+            aria-label="Façon de parler"
+          >
             {(
               [
                 { key: "mains-libres", label: "Mains libres" },
@@ -1369,11 +1863,21 @@ function HomeScreen({
             ))}
           </div>
           <div className="flex flex-col gap-1.5">
-            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Qui fait la voix">
+            <div
+              className={`grid ${pcReady ? "grid-cols-3" : "grid-cols-2"} gap-1.5 rounded-xl bg-bg p-1`}
+              role="radiogroup"
+              aria-label="Qui fait la voix"
+            >
               {(
                 [
-                  { key: "elevenlabs", label: "Conversation ElevenLabs" },
+                  {
+                    key: "elevenlabs",
+                    label: pcReady ? "ElevenLabs" : "Conversation ElevenLabs",
+                  },
                   { key: "eco", label: "Mode éco" },
+                  ...(pcReady
+                    ? [{ key: "live", label: "Temps réel (mon PC)" }]
+                    : []),
                 ] as { key: Engine; label: string }[]
               ).map((e) => (
                 <button
@@ -1391,11 +1895,17 @@ function HomeScreen({
             <p className="px-1 text-xs text-muted">
               {engine === "eco"
                 ? "Le téléphone écoute gratuitement, Claude réfléchit, et seule la lecture de la réponse est confiée à la voix choisie : zéro minute de conversation ElevenLabs. Pour interrompre le personnage, appuie sur le micro."
-                : "Conversation en temps réel ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes de conversation."}
+                : engine === "live"
+                  ? "Tout se passe sur ton PC (oreille Whisper, Claude, voix Chatterbox) en continu : le PC détecte tout seul la fin de ta phrase, répond vite, et tu peux lui couper la parole en parlant. Gratuit, illimité ; le PC doit être allumé."
+                  : "Conversation en temps réel ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes de conversation."}
             </p>
             {engine === "eco" && (
               <>
-                <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Voix du mode éco">
+                <div
+                  className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
+                  role="radiogroup"
+                  aria-label="Voix du mode éco"
+                >
                   {VOICE_CHOICES.map((v) => (
                     <button
                       key={v.key}
@@ -1409,8 +1919,14 @@ function HomeScreen({
                     </button>
                   ))}
                 </div>
-                <p className="px-1 text-xs text-muted">{VOICE_CHOICES.find((v) => v.key === voiceChoice)?.hint}</p>
-                <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Oreille du mode éco">
+                <p className="px-1 text-xs text-muted">
+                  {VOICE_CHOICES.find((v) => v.key === voiceChoice)?.hint}
+                </p>
+                <div
+                  className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
+                  role="radiogroup"
+                  aria-label="Oreille du mode éco"
+                >
                   {EAR_CHOICES.map((e) => (
                     <button
                       key={e.key}
@@ -1424,11 +1940,17 @@ function HomeScreen({
                     </button>
                   ))}
                 </div>
-                <p className="px-1 text-xs text-muted">Oreille : {EAR_CHOICES.find((e) => e.key === earChoice)?.hint}</p>
+                <p className="px-1 text-xs text-muted">
+                  Oreille : {EAR_CHOICES.find((e) => e.key === earChoice)?.hint}
+                </p>
               </>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Vitesse de la voix">
+          <div
+            className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1"
+            role="radiogroup"
+            aria-label="Vitesse de la voix"
+          >
             {SPEEDS.map((s) => (
               <button
                 key={s.key}
@@ -1450,13 +1972,26 @@ function HomeScreen({
         onClick={onStart}
         className="flex h-16 items-center justify-center gap-2 rounded-2xl bg-accent text-lg font-bold text-accent-contrast shadow-lg shadow-accent/30 transition active:scale-[0.98]"
       >
-        <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          aria-hidden="true"
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <rect x="9" y="3" width="6" height="11" rx="3" />
           <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
         </svg>
         Commencer
       </button>
-      <nav className="flex items-center justify-center gap-4 text-xs text-muted" aria-label="Autres écrans">
+      <nav
+        className="flex items-center justify-center gap-4 text-xs text-muted"
+        aria-label="Autres écrans"
+      >
         <Link href="/carnet" className="underline">
           Carnet{dueWords > 0 ? ` (${dueWords})` : ""}
         </Link>
@@ -1486,18 +2021,33 @@ function CapSheet({
   onCancel: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-20 flex items-end justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="cap-title">
+    <div
+      className="fixed inset-0 z-20 flex items-end justify-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="cap-title"
+    >
       <div className="flex w-full max-w-md flex-col gap-3 rounded-3xl border border-line bg-elevated p-5">
         <h2 id="cap-title" className="text-lg font-bold">
           Plafond du jour atteint
         </h2>
         <p className="text-sm text-muted">
-          Tu as déjà parlé {todayMinutes} min aujourd&apos;hui, pour un plafond de {capMinutes} min. Continuer coûtera des minutes ElevenLabs en plus. Le plafond se règle dans Réglages.
+          Tu as déjà parlé {todayMinutes} min aujourd&apos;hui, pour un plafond
+          de {capMinutes} min. Continuer coûtera des minutes ElevenLabs en plus.
+          Le plafond se règle dans Réglages.
         </p>
-        <button type="button" onClick={onContinue} className="h-12 rounded-2xl bg-accent text-sm font-bold text-accent-contrast">
+        <button
+          type="button"
+          onClick={onContinue}
+          className="h-12 rounded-2xl bg-accent text-sm font-bold text-accent-contrast"
+        >
           Continuer quand même
         </button>
-        <button type="button" onClick={onCancel} className="h-12 rounded-2xl border border-line text-sm font-semibold">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="h-12 rounded-2xl border border-line text-sm font-semibold"
+        >
           Arrêter pour aujourd&apos;hui
         </button>
       </div>
@@ -1526,10 +2076,16 @@ function TopicScreen({
     fetch("/api/sujets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personality: personality.id, language, recent: recentKey ? recentKey.split("|") : [] }),
+      body: JSON.stringify({
+        personality: personality.id,
+        language,
+        recent: recentKey ? recentKey.split("|") : [],
+      }),
     })
       .then(async (res) => {
-        const data = (await res.json().catch(() => ({}))) as { topics?: string[] };
+        const data = (await res.json().catch(() => ({}))) as {
+          topics?: string[];
+        };
         if (active) setTopics(Array.isArray(data.topics) ? data.topics : []);
       })
       .catch(() => {
@@ -1540,19 +2096,44 @@ function TopicScreen({
     };
   }, [personality.id, language, recentKey]);
 
-  const displayName = personality.id === "situation" ? personality.modeLabel : personality.name;
-  const list = topics && topics.length > 0 ? topics : topics ? randomList(personality.id, language) : null;
+  const displayName =
+    personality.id === "situation" ? personality.modeLabel : personality.name;
+  const list =
+    topics && topics.length > 0
+      ? topics
+      : topics
+        ? randomList(personality.id, language)
+        : null;
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center gap-3">
-        <button type="button" onClick={onBack} aria-label="Retour" className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-elevated">
-          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Retour"
+          className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-elevated"
+        >
+          <svg
+            aria-hidden="true"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
         <div className="flex items-center gap-2">
-          <PersonaAvatar style={personality.avatar} size={40} label={displayName} />
+          <PersonaAvatar
+            style={personality.avatar}
+            size={40}
+            label={displayName}
+          />
           <div className="flex flex-col">
             <span className="text-base font-bold">De quoi on parle ?</span>
             <span className="text-xs text-muted">
@@ -1564,7 +2145,12 @@ function TopicScreen({
 
       <section className="flex flex-col gap-2">
         {list === null
-          ? [0, 1, 2, 3].map((i) => <div key={i} className="h-16 animate-pulse rounded-2xl border border-line bg-elevated" />)
+          ? [0, 1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-16 animate-pulse rounded-2xl border border-line bg-elevated"
+              />
+            ))
           : list.map((t) => (
               <button
                 key={t}
@@ -1583,7 +2169,17 @@ function TopicScreen({
           onClick={() => onPick({ title: null, own: true })}
           className="flex h-16 items-center justify-center gap-2 rounded-2xl bg-accent text-base font-bold text-accent-contrast"
         >
-          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            aria-hidden="true"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <rect x="9" y="3" width="6" height="11" rx="3" />
             <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
           </svg>
@@ -1591,13 +2187,19 @@ function TopicScreen({
         </button>
         <button
           type="button"
-          onClick={() => onPick({ title: randomTopic(personality.id, language, recent), own: false })}
+          onClick={() =>
+            onPick({
+              title: randomTopic(personality.id, language, recent),
+              own: false,
+            })
+          }
           className="h-14 rounded-2xl border border-line bg-elevated text-base font-semibold"
         >
           Surprends-moi
         </button>
         <p className="text-center text-xs text-muted">
-          « Mon propre sujet » : tu le dis à voix haute dès que {displayName} te le demande.
+          « Mon propre sujet » : tu le dis à voix haute dès que {displayName} te
+          le demande.
         </p>
       </section>
     </main>
@@ -1629,7 +2231,14 @@ function BilanScreen({
   onRematch,
   onTeacher,
 }: {
-  summary: { seconds: number; userTurns: number; userShare: number; streak: number; minutesToday: number; goalReached: boolean } | null;
+  summary: {
+    seconds: number;
+    userTurns: number;
+    userShare: number;
+    streak: number;
+    minutesToday: number;
+    goalReached: boolean;
+  } | null;
   bilan: BilanResult | null;
   loading: boolean;
   personality: Personality;
@@ -1647,7 +2256,8 @@ function BilanScreen({
   const [showCorrected, setShowCorrected] = useState(false);
   const minutes = summary ? Math.round(summary.seconds / 60) : 0;
   const tooShort = !summary || summary.seconds < 30;
-  const displayName = personality.id === "situation" ? "Ton partenaire" : personality.name;
+  const displayName =
+    personality.id === "situation" ? "Ton partenaire" : personality.name;
   const fallbackEncouragement =
     language === "en"
       ? tooShort
@@ -1657,11 +2267,18 @@ function BilanScreen({
         ? "C'était rapide ! La prochaine fois, on discute un peu plus longtemps."
         : "Belle discussion, Cherif ! On remet ça demain ?";
   const encouragement = bilan?.encouragement ?? fallbackEncouragement;
-  const showTeacher = Boolean(bilan?.suggestTeacher && bilan.teacherFocus && personality.id !== "prof");
+  const showTeacher = Boolean(
+    bilan?.suggestTeacher && bilan.teacherFocus && personality.id !== "prof",
+  );
   // Phrases pour le shadowing : d'abord ses phrases corrigées, sinon des phrases du personnage.
   const shadowingPhrases = (() => {
-    const own = (bilan?.corrections ?? []).map((c) => usableForShadowing(c.corrected)).filter((t): t is string => t !== null);
-    const theirs = transcript.filter((l) => l.role === "agent").map((l) => usableForShadowing(l.text)).filter((t): t is string => t !== null);
+    const own = (bilan?.corrections ?? [])
+      .map((c) => usableForShadowing(c.corrected))
+      .filter((t): t is string => t !== null);
+    const theirs = transcript
+      .filter((l) => l.role === "agent")
+      .map((l) => usableForShadowing(l.text))
+      .filter((t): t is string => t !== null);
     return [...new Set([...own, ...theirs])].slice(0, 5);
   })();
 
@@ -1669,11 +2286,27 @@ function BilanScreen({
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <header className="flex flex-col items-center gap-2 text-center">
         <div className="grid h-16 w-16 place-items-center rounded-full bg-speaking/15 text-speaking">
-          <svg aria-hidden="true" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            aria-hidden="true"
+            width="32"
+            height="32"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M20 6 9 17l-5-5" />
           </svg>
         </div>
-        <h1 className="text-2xl font-bold">{kind === "test" ? "Test terminé" : tooShort ? "Séance éclair" : "Bien joué, Cherif !"}</h1>
+        <h1 className="text-2xl font-bold">
+          {kind === "test"
+            ? "Test terminé"
+            : tooShort
+              ? "Séance éclair"
+              : "Bien joué, Cherif !"}
+        </h1>
         <p className="text-sm text-muted">
           {summary?.goalReached
             ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
@@ -1684,9 +2317,18 @@ function BilanScreen({
       </header>
 
       <section className="grid grid-cols-3 gap-2">
-        <Tile value={summary && summary.seconds < 60 ? "< 1" : String(minutes)} label={minutes > 1 ? "minutes" : "minute"} />
-        <Tile value={String(summary?.userTurns ?? 0)} label="fois où tu as parlé" />
-        <Tile value={`${summary?.userShare ?? 0} %`} label="du temps de parole à toi" />
+        <Tile
+          value={summary && summary.seconds < 60 ? "< 1" : String(minutes)}
+          label={minutes > 1 ? "minutes" : "minute"}
+        />
+        <Tile
+          value={String(summary?.userTurns ?? 0)}
+          label="fois où tu as parlé"
+        />
+        <Tile
+          value={`${summary?.userShare ?? 0} %`}
+          label="du temps de parole à toi"
+        />
       </section>
 
       {kind === "test" && (
@@ -1698,21 +2340,32 @@ function BilanScreen({
           ) : levelResult ? (
             <>
               <div className="flex items-center gap-3">
-                <span className="rounded-2xl bg-accent px-4 py-2 font-mono text-3xl font-bold text-accent-contrast">{levelResult.level}</span>
-                <span className="text-sm font-semibold">Ton niveau en {LANGUAGE_LABELS[language].toLowerCase()}</span>
+                <span className="rounded-2xl bg-accent px-4 py-2 font-mono text-3xl font-bold text-accent-contrast">
+                  {levelResult.level}
+                </span>
+                <span className="text-sm font-semibold">
+                  Ton niveau en {LANGUAGE_LABELS[language].toLowerCase()}
+                </span>
               </div>
-              {levelResult.summary && <p className="text-sm">{levelResult.summary}</p>}
+              {levelResult.summary && (
+                <p className="text-sm">{levelResult.summary}</p>
+              )}
               {levelResult.strengths.length > 0 && (
                 <p className="text-xs text-muted">
-                  <strong>Points forts :</strong> {levelResult.strengths.join(" · ")}
+                  <strong>Points forts :</strong>{" "}
+                  {levelResult.strengths.join(" · ")}
                 </p>
               )}
               {levelResult.toWorkOn.length > 0 && (
                 <p className="text-xs text-muted">
-                  <strong>À travailler :</strong> {levelResult.toWorkOn.join(" · ")}
+                  <strong>À travailler :</strong>{" "}
+                  {levelResult.toWorkOn.join(" · ")}
                 </p>
               )}
-              <p className="text-xs text-muted">Les personnages adaptent maintenant leur vocabulaire à ce niveau. Le test se refait tous les mois.</p>
+              <p className="text-xs text-muted">
+                Les personnages adaptent maintenant leur vocabulaire à ce
+                niveau. Le test se refait tous les mois.
+              </p>
             </>
           ) : null}
         </section>
@@ -1720,33 +2373,63 @@ function BilanScreen({
 
       {kind !== "test" && (
         <section className="flex items-center gap-3 rounded-2xl border border-line bg-elevated p-3">
-          <PersonaAvatar style={personality.avatar} size={56} label={displayName} />
+          <PersonaAvatar
+            style={personality.avatar}
+            size={56}
+            label={displayName}
+          />
           <p className="text-sm leading-snug">{encouragement}</p>
         </section>
       )}
 
       {kind !== "test" && (progression || bilan?.level) && (
-        <section className={`flex flex-col gap-1 rounded-2xl border p-4 ${progression?.promoted ? "border-speaking/50 bg-speaking/10" : "border-line bg-elevated"}`}>
+        <section
+          className={`flex flex-col gap-1 rounded-2xl border p-4 ${progression?.promoted ? "border-speaking/50 bg-speaking/10" : "border-line bg-elevated"}`}
+        >
           {progression?.promoted ? (
             <>
-              <p className="text-base font-bold">Tu passes au niveau {progression.promoted} en {language === "en" ? "anglais" : "français"} !</p>
-              <p className="text-sm text-muted">Trois séances de suite au-dessus de {progression.current ?? "ton niveau de départ"} : les personnages montent d&apos;un cran dès la prochaine fois.</p>
+              <p className="text-base font-bold">
+                Tu passes au niveau {progression.promoted} en{" "}
+                {language === "en" ? "anglais" : "français"} !
+              </p>
+              <p className="text-sm text-muted">
+                Trois séances de suite au-dessus de{" "}
+                {progression.current ?? "ton niveau de départ"} : les
+                personnages montent d&apos;un cran dès la prochaine fois.
+              </p>
             </>
           ) : (
             <>
               <p className="text-sm">
-                Niveau observé aujourd&apos;hui : <strong>{progression?.observed ?? bilan?.level}</strong>
-                {progression?.current ? <> · niveau enregistré : <strong>{progression.current}</strong></> : null}
+                Niveau observé aujourd&apos;hui :{" "}
+                <strong>{progression?.observed ?? bilan?.level}</strong>
+                {progression?.current ? (
+                  <>
+                    {" "}
+                    · niveau enregistré : <strong>{progression.current}</strong>
+                  </>
+                ) : null}
               </p>
-              {bilan?.levelWhy && <p className="text-xs text-muted">{bilan.levelWhy}</p>}
-              {progression && progression.streak > 0 && progression.streak < progression.needed && (
-                <p className="text-xs text-muted">
-                  Encore {progression.needed - progression.streak} séance{progression.needed - progression.streak > 1 ? "s" : ""} comme celle-ci et tu montes d&apos;un niveau.
-                </p>
+              {bilan?.levelWhy && (
+                <p className="text-xs text-muted">{bilan.levelWhy}</p>
               )}
-              {progression && progression.streak === 0 && progression.current && (
-                <p className="text-xs text-muted">Trois séances de suite jugées au-dessus de {progression.current} font monter ton niveau.</p>
-              )}
+              {progression &&
+                progression.streak > 0 &&
+                progression.streak < progression.needed && (
+                  <p className="text-xs text-muted">
+                    Encore {progression.needed - progression.streak} séance
+                    {progression.needed - progression.streak > 1 ? "s" : ""}{" "}
+                    comme celle-ci et tu montes d&apos;un niveau.
+                  </p>
+                )}
+              {progression &&
+                progression.streak === 0 &&
+                progression.current && (
+                  <p className="text-xs text-muted">
+                    Trois séances de suite jugées au-dessus de{" "}
+                    {progression.current} font monter ton niveau.
+                  </p>
+                )}
             </>
           )}
         </section>
@@ -1755,9 +2438,14 @@ function BilanScreen({
       {showTeacher && bilan?.teacherFocus && (
         <section className="flex flex-col gap-2 rounded-2xl border border-accent/40 bg-accent-soft p-4">
           <p className="text-sm">
-            {displayName} te conseille une petite séance avec Emma, la prof, sur <strong>{bilan.teacherFocus}</strong>.
+            {displayName} te conseille une petite séance avec Emma, la prof, sur{" "}
+            <strong>{bilan.teacherFocus}</strong>.
           </p>
-          <button type="button" onClick={() => onTeacher(bilan.teacherFocus!)} className="h-12 rounded-xl bg-accent text-sm font-bold text-accent-contrast">
+          <button
+            type="button"
+            onClick={() => onTeacher(bilan.teacherFocus!)}
+            className="h-12 rounded-xl bg-accent text-sm font-bold text-accent-contrast"
+          >
             Travailler ça avec Emma
           </button>
         </section>
@@ -1765,31 +2453,57 @@ function BilanScreen({
 
       {loading ? (
         <section className="rounded-2xl border border-line bg-elevated p-4">
-          <p className="text-sm text-muted">{displayName} relit la discussion…</p>
+          <p className="text-sm text-muted">
+            {displayName} relit la discussion…
+          </p>
         </section>
       ) : (
         <>
           {bilan?.debate && (
             <section className="flex flex-col gap-3 rounded-2xl border border-accent/40 bg-elevated p-4">
               <div className="flex items-center gap-2">
-                <span className="grid h-9 w-9 place-items-center rounded-full bg-accent-soft text-accent" aria-hidden>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <span
+                  className="grid h-9 w-9 place-items-center rounded-full bg-accent-soft text-accent"
+                  aria-hidden
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M12 3v18M5 7l7-4 7 4M3 13l2-6 2 6a2 2 0 0 1-4 0zM17 13l2-6 2 6a2 2 0 0 1-4 0zM8 21h8" />
                   </svg>
                 </span>
                 <div className="flex flex-col">
                   <span className="text-sm font-semibold">Verdict du juge</span>
                   <span className="text-xs text-muted">
-                    {bilan.debate.winner === "cherif" ? "Tu as gagné ce débat." : bilan.debate.winner === "leo" ? "Leo a gagné ce débat." : "Match nul."}
-                    {bilan.debate.side ? ` Tu défendais le ${bilan.debate.side === "for" ? "pour" : "contre"}.` : ""}
+                    {bilan.debate.winner === "cherif"
+                      ? "Tu as gagné ce débat."
+                      : bilan.debate.winner === "leo"
+                        ? "Leo a gagné ce débat."
+                        : "Match nul."}
+                    {bilan.debate.side
+                      ? ` Tu défendais le ${bilan.debate.side === "for" ? "pour" : "contre"}.`
+                      : ""}
                   </span>
                 </div>
               </div>
-              {bilan.debate.why && <p className="text-sm leading-snug">{bilan.debate.why}</p>}
+              {bilan.debate.why && (
+                <p className="text-sm leading-snug">{bilan.debate.why}</p>
+              )}
               {bilan.debate.bestArgument && (
                 <div className="rounded-xl bg-bg px-3 py-2 text-sm">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted">Ton meilleur argument</span>
-                  <p className="mt-1 leading-snug">{bilan.debate.bestArgument}</p>
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Ton meilleur argument
+                  </span>
+                  <p className="mt-1 leading-snug">
+                    {bilan.debate.bestArgument}
+                  </p>
                 </div>
               )}
               {bilan.debate.improvements.length > 0 && (
@@ -1809,27 +2523,40 @@ function BilanScreen({
                 onClick={() =>
                   onRematch({
                     side: bilan.debate?.side ?? null,
-                    notes: [...(bilan.debate?.improvements ?? []), ...bilan.errors.map((e) => `${e.wrong} → ${e.right}`)].slice(0, 6),
+                    notes: [
+                      ...(bilan.debate?.improvements ?? []),
+                      ...bilan.errors.map((e) => `${e.wrong} → ${e.right}`),
+                    ].slice(0, 6),
                   })
                 }
                 className="h-12 rounded-xl bg-accent text-sm font-bold text-accent-contrast"
               >
                 Refaire le débat
               </button>
-              <span className="text-center text-xs text-muted">Même sujet, mêmes camps. Le juge vérifiera si tu as corrigé ses remarques.</span>
+              <span className="text-center text-xs text-muted">
+                Même sujet, mêmes camps. Le juge vérifiera si tu as corrigé ses
+                remarques.
+              </span>
             </section>
           )}
           {bilan && bilan.upgrades.length > 0 && (
             <section className="flex flex-col gap-2 rounded-2xl border border-accent/30 bg-elevated p-4">
-              <span className="text-sm font-semibold">Dire plus précisément</span>
+              <span className="text-sm font-semibold">
+                Dire plus précisément
+              </span>
               {bilan.upgrades.map((u) => (
-                <div key={u.used} className="flex flex-col gap-1 rounded-xl bg-bg px-3 py-2">
+                <div
+                  key={u.used}
+                  className="flex flex-col gap-1 rounded-xl bg-bg px-3 py-2"
+                >
                   <div className="flex flex-wrap items-center gap-x-2 text-sm">
                     <span className="text-muted">{u.used}</span>
                     <span className="text-muted" aria-hidden>
                       →
                     </span>
-                    <span className="font-semibold text-accent">{u.better}</span>
+                    <span className="font-semibold text-accent">
+                      {u.better}
+                    </span>
                   </div>
                   {u.why && <span className="text-xs text-muted">{u.why}</span>}
                 </div>
@@ -1840,10 +2567,15 @@ function BilanScreen({
             <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
               <span className="text-sm font-semibold">À retenir</span>
               {bilan.errors.map((e) => (
-                <div key={e.wrong} className="flex flex-col gap-1 rounded-xl bg-bg px-3 py-2">
+                <div
+                  key={e.wrong}
+                  className="flex flex-col gap-1 rounded-xl bg-bg px-3 py-2"
+                >
                   <div className="flex flex-wrap items-center gap-x-2 text-sm">
                     <span className="text-muted line-through">{e.wrong}</span>
-                    <span className="font-semibold text-speaking">{e.right}</span>
+                    <span className="font-semibold text-speaking">
+                      {e.right}
+                    </span>
                   </div>
                   {e.tip && <span className="text-xs text-muted">{e.tip}</span>}
                 </div>
@@ -1851,45 +2583,81 @@ function BilanScreen({
             </section>
           )}
           {kind !== "test" && (
-          <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold">Mots du jour</span>
-              {bilan && bilan.words.length > 0 && <span className="text-xs text-muted">{bilan.words.length} nouveaux</span>}
-            </div>
-            {bilan && bilan.words.length > 0 ? (
-              bilan.words.map((w) => (
-                <div key={w.en} className="flex items-center justify-between gap-3 rounded-xl bg-accent-soft px-3 py-2">
-                  <span className="font-semibold">{w.en}</span>
-                  <span className="text-right text-sm text-muted">{w.fr}</span>
-                </div>
-              ))
-            ) : bilan && !bilan.available ? (
-              <p className="text-sm text-muted">Les mots du jour s&apos;activent avec la clé Anthropic (voir Réglages).</p>
-            ) : (
-              <p className="text-sm text-muted">Pas assez de discussion pour relever des mots cette fois.</p>
-            )}
-            {costFcfa != null && (
-              <p className="mt-auto pt-2 text-xs text-muted">
-                Mots ajoutés au carnet. Coût estimé de la séance : ≈ {costFcfa} FCFA.
-              </p>
-            )}
-          </section>
+            <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">Mots du jour</span>
+                {bilan && bilan.words.length > 0 && (
+                  <span className="text-xs text-muted">
+                    {bilan.words.length} nouveaux
+                  </span>
+                )}
+              </div>
+              {bilan && bilan.words.length > 0 ? (
+                bilan.words.map((w) => (
+                  <div
+                    key={w.en}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-accent-soft px-3 py-2"
+                  >
+                    <span className="font-semibold">{w.en}</span>
+                    <span className="text-right text-sm text-muted">
+                      {w.fr}
+                    </span>
+                  </div>
+                ))
+              ) : bilan && !bilan.available ? (
+                <p className="text-sm text-muted">
+                  Les mots du jour s&apos;activent avec la clé Anthropic (voir
+                  Réglages).
+                </p>
+              ) : (
+                <p className="text-sm text-muted">
+                  Pas assez de discussion pour relever des mots cette fois.
+                </p>
+              )}
+              {costFcfa != null && (
+                <p className="mt-auto pt-2 text-xs text-muted">
+                  Mots ajoutés au carnet. Coût estimé de la séance : ≈{" "}
+                  {costFcfa} FCFA.
+                </p>
+              )}
+            </section>
           )}
 
           {transcript.length > 0 && kind !== "test" && (
             <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
-              <button type="button" onClick={() => setShowCorrected((v) => !v)} aria-expanded={showCorrected} className="flex items-center justify-between text-left text-sm font-semibold">
-                <span>Texte de la séance{bilan && bilan.corrections.length > 0 ? ` · ${bilan.corrections.length} correction${bilan.corrections.length > 1 ? "s" : ""}` : ""}</span>
-                <span className="text-muted">{showCorrected ? "Masquer" : "Voir"}</span>
+              <button
+                type="button"
+                onClick={() => setShowCorrected((v) => !v)}
+                aria-expanded={showCorrected}
+                className="flex items-center justify-between text-left text-sm font-semibold"
+              >
+                <span>
+                  Texte de la séance
+                  {bilan && bilan.corrections.length > 0
+                    ? ` · ${bilan.corrections.length} correction${bilan.corrections.length > 1 ? "s" : ""}`
+                    : ""}
+                </span>
+                <span className="text-muted">
+                  {showCorrected ? "Masquer" : "Voir"}
+                </span>
               </button>
               {showCorrected && (
                 <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
                   {transcript.map((line, i) => {
                     const fix = bilan?.corrections.find((c) => c.index === i);
                     return (
-                      <div key={line.id} className={`flex max-w-[92%] flex-col gap-1 rounded-2xl px-3 py-2 text-sm ${line.role === "user" ? "self-end bg-accent-soft" : "self-start bg-bg"}`}>
-                        <span className={fix ? "text-muted line-through" : ""}>{line.text}</span>
-                        {fix && <span className="font-semibold text-speaking">{fix.corrected}</span>}
+                      <div
+                        key={line.id}
+                        className={`flex max-w-[92%] flex-col gap-1 rounded-2xl px-3 py-2 text-sm ${line.role === "user" ? "self-end bg-accent-soft" : "self-start bg-bg"}`}
+                      >
+                        <span className={fix ? "text-muted line-through" : ""}>
+                          {line.text}
+                        </span>
+                        {fix && (
+                          <span className="font-semibold text-speaking">
+                            {fix.corrected}
+                          </span>
+                        )}
                       </div>
                     );
                   })}
@@ -1905,7 +2673,10 @@ function BilanScreen({
           href="/prononciation?from=seance"
           onClick={() => {
             try {
-              sessionStorage.setItem("prof-langue:shadowing", JSON.stringify({ language, phrases: shadowingPhrases }));
+              sessionStorage.setItem(
+                "prof-langue:shadowing",
+                JSON.stringify({ language, phrases: shadowingPhrases }),
+              );
             } catch {
               // stockage indisponible : la page prendra ses propres phrases
             }
@@ -1913,8 +2684,13 @@ function BilanScreen({
           className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-elevated px-4 py-3"
         >
           <span className="flex flex-col">
-            <span className="text-sm font-semibold">Répéter {shadowingPhrases.length} phrase{shadowingPhrases.length > 1 ? "s" : ""} de la séance</span>
-            <span className="text-xs text-muted">Prononciation notée mot par mot</span>
+            <span className="text-sm font-semibold">
+              Répéter {shadowingPhrases.length} phrase
+              {shadowingPhrases.length > 1 ? "s" : ""} de la séance
+            </span>
+            <span className="text-xs text-muted">
+              Prononciation notée mot par mot
+            </span>
           </span>
           <span className="text-muted" aria-hidden>
             ›
@@ -1923,10 +2699,18 @@ function BilanScreen({
       )}
 
       <div className="flex flex-col gap-2">
-        <button type="button" onClick={onAgain} className="h-14 rounded-2xl bg-accent text-base font-bold text-accent-contrast">
+        <button
+          type="button"
+          onClick={onAgain}
+          className="h-14 rounded-2xl bg-accent text-base font-bold text-accent-contrast"
+        >
           Nouvelle séance
         </button>
-        <button type="button" onClick={onHome} className="h-12 rounded-2xl border border-line bg-elevated text-sm font-semibold">
+        <button
+          type="button"
+          onClick={onHome}
+          className="h-12 rounded-2xl border border-line bg-elevated text-sm font-semibold"
+        >
           Retour à l&apos;accueil
         </button>
       </div>
@@ -1957,10 +2741,18 @@ function humanizeError(message: string) {
   if (m.includes("override")) {
     return "ElevenLabs refuse une consigne. Ouvre Réglages et appuie sur « Configurer l'agent automatiquement ».";
   }
-  if (m.includes("livekit") || m.includes("disconnected") || m.includes("closed")) {
+  if (
+    m.includes("livekit") ||
+    m.includes("disconnected") ||
+    m.includes("closed")
+  ) {
     return "ElevenLabs a coupé la connexion. Le plus souvent, l'agent n'accepte pas encore les réglages de l'app : ouvre Réglages et vérifie qu'il est « Prêt ». Sinon, réessaie dans un instant.";
   }
-  if (m.includes("network") || m.includes("failed to fetch") || m.includes("timeout")) {
+  if (
+    m.includes("network") ||
+    m.includes("failed to fetch") ||
+    m.includes("timeout")
+  ) {
     return "La connexion est trop faible. Rapproche-toi du réseau et réessaie.";
   }
   return `Problème : ${message}`;
