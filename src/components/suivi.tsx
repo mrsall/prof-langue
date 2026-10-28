@@ -16,7 +16,7 @@ export function Suivi() {
 
   useEffect(() => {
     let active = true;
-    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, byMode: [], monthFcfa: 0, pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
@@ -111,6 +111,11 @@ export function Suivi() {
               <span className="text-sm">
                 Français : <strong>{data.levels.fr ?? "à tester"}</strong>
               </span>
+              {data.progression.length > 0 && (
+                <p className="mt-1 text-[11px] leading-snug text-muted">
+                  Vu en séance : {data.progression.slice(0, 6).map((p) => `${p.level} (${p.language.toUpperCase()}, ${p.day.slice(8, 10)}/${p.day.slice(5, 7)})`).join(" · ")}. Trois séances de suite au-dessus de ton niveau le font monter.
+                </p>
+              )}
             </div>
             <Link href="/carnet" className="flex flex-col gap-1 rounded-2xl border border-line bg-elevated p-4">
               <span className="text-xs text-muted">Carnet</span>

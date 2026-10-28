@@ -104,6 +104,29 @@ const STUBS = `
     HTMLMediaElement.prototype.load = function () {};
 
     Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => ({ getTracks: () => [] }) }, configurable: true });
+    // Faux traitement du son pour l'enregistreur WAV : le niveau du micro se pilote par window.__micLevel (0 = silence).
+    window.__micLevel = 0;
+    class FakeAudioContext {
+      constructor() { this.state = "running"; this.sampleRate = 16000; this.destination = {}; this._timers = []; }
+      resume() { return Promise.resolve(); }
+      close() { this._timers.forEach((t) => clearInterval(t)); return Promise.resolve(); }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
+      createScriptProcessor(size) {
+        const node = { onaudioprocess: null, connect() {}, disconnect() {} };
+        const timer = setInterval(() => {
+          if (!node.onaudioprocess) return;
+          const level = window.__micLevel || 0;
+          const data = new Float32Array(size);
+          for (let i = 0; i < size; i++) data[i] = level * Math.sin(i / 10);
+          node.onaudioprocess({ inputBuffer: { getChannelData: () => data } });
+        }, Math.round((size / 16000) * 1000));
+        this._timers.push(timer);
+        return node;
+      }
+    }
+    window.AudioContext = FakeAudioContext;
+    window.webkitAudioContext = FakeAudioContext;
     navigator.vibrate = () => true;
     navigator.serviceWorker && (navigator.serviceWorker.register = async () => ({}));
   })();
@@ -230,16 +253,35 @@ try {
     ];
     const bilan = await (await page.request.post(`${BASE}/api/bilan`, { data: { transcript, durationSeconds: 120, personality: "prof", language: "fr" } })).json();
     if (!Array.isArray(bilan.errors) || !Array.isArray(bilan.corrections) || bilan.corrections.length < 1) throw new Error(`bilan : ${JSON.stringify(bilan).slice(0, 160)}`);
+    if (!/^[ABC][12]$/.test(bilan.level ?? "")) throw new Error(`bilan sans niveau observé : ${JSON.stringify(bilan).slice(0, 120)}`);
     const niveau = await (await page.request.post(`${BASE}/api/niveau`, { data: { transcript, language: "fr" } })).json();
     if (!/^[ABC][12]$/.test(niveau.level ?? "")) throw new Error(`niveau : ${JSON.stringify(niveau).slice(0, 120)}`);
   });
-  await step("Transcription de secours (/api/stt) et phonèmes français (/api/phonemes)", async () => {
+  await step("Progression du niveau : trois séances au-dessus du niveau → niveau suivant", async () => {
+    if (!process.env.DATABASE_URL) return;
+    const transcript = Array.from({ length: 4 }, (_, i) => [{ role: "agent", text: `Question ${i}` }, { role: "user", text: `my answer number ${i} with several words` }]).flat();
+    // Niveau de départ connu : le test (Claude simulé) enregistre A2 en anglais.
+    const niveau = await (await page.request.post(`${BASE}/api/niveau`, { data: { transcript, language: "en" } })).json();
+    if (niveau.level !== "A2") throw new Error(`niveau de départ : ${JSON.stringify(niveau).slice(0, 100)}`);
+    let last = null;
+    for (let i = 0; i < 3; i++) {
+      const res = await page.request.post(`${BASE}/api/sessions`, { data: { kind: "conversation", engine: "eco", language: "en", personality: "ami", seconds: 200, userTurns: 8, userShare: 60, transcript, observedLevel: "B1" } });
+      last = await res.json();
+      if (!last.saved) throw new Error(`séance non enregistrée : ${JSON.stringify(last).slice(0, 120)}`);
+    }
+    if (last?.progression?.promoted !== "B1") throw new Error(`pas de passage au niveau B1 : ${JSON.stringify(last?.progression)}`);
+    const suivi = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    if (suivi.levels?.en !== "B1" || !Array.isArray(suivi.progression) || suivi.progression.length < 3) throw new Error(`suivi : ${JSON.stringify({ levels: suivi.levels, progression: suivi.progression }).slice(0, 160)}`);
+  });
+  await step("Transcription de secours (/api/stt, Groq puis Scribe) et phonèmes français (/api/phonemes)", async () => {
     const wav = Buffer.alloc(44 + 16000);
     wav.write("RIFF", 0);
     wav.write("WAVE", 8);
-    const stt = await page.request.post(`${BASE}/api/stt`, { multipart: { language: "fr", audio: { name: "a.wav", mimeType: "audio/wav", buffer: wav } } });
+    const stt = await page.request.post(`${BASE}/api/stt`, { multipart: { language: "fr", engine: "groq", audio: { name: "a.wav", mimeType: "audio/wav", buffer: wav } } });
     const sttData = await stt.json();
-    if (!stt.ok() || !sttData.text) throw new Error(`stt : ${JSON.stringify(sttData).slice(0, 120)}`);
+    if (!stt.ok() || !sttData.text || sttData.engine !== "groq") throw new Error(`stt groq : ${JSON.stringify(sttData).slice(0, 120)}`);
+    const scribe = await (await page.request.post(`${BASE}/api/stt`, { multipart: { language: "fr", engine: "scribe", audio: { name: "a.wav", mimeType: "audio/wav", buffer: wav } } })).json();
+    if (scribe.engine !== "scribe" || !scribe.text) throw new Error(`stt scribe : ${JSON.stringify(scribe).slice(0, 120)}`);
     const ph = await (await page.request.post(`${BASE}/api/phonemes`, { data: { sentences: ["Salut Cherif ! Ça va ?"], language: "fr" } })).json();
     if (!ph.phonemes?.[0] || !/salˈy/.test(ph.phonemes[0])) throw new Error(`phonèmes : ${JSON.stringify(ph).slice(0, 120)}`);
   });
@@ -306,6 +348,7 @@ try {
     await page.getByRole("button", { name: "Terminer" }).click();
     await page.getByText(/À retenir|Texte de la séance/).first().waitFor({ timeout: 30000 });
     await page.getByText(/Répéter \d+ phrase/).waitFor({ timeout: 10000 });
+    await page.getByText(/Niveau observé aujourd/).waitFor({ timeout: 10000 });
   });
   await step("Prononciation depuis le bilan : écoute, répétition notée, phrase suivante", async () => {
     await page.getByText(/Répéter \d+ phrase/).click();
@@ -409,6 +452,29 @@ try {
       window.__nextSpeech = "I played football with my friends";
     });
     await waitBubble("what did you do after", 25000);
+    await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Oreille Groq : enregistrement + Whisper
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "phone", "prof-langue:ear-choice": "groq", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Oreille Groq (enregistrement + Whisper simulé), Max en français");
+  await step("Le téléphone enregistre, Groq transcrit, Max répond", async () => {
+    await mockStats(true);
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => {
+      window.__micLevel = 0.6;
+    });
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => {
+      window.__micLevel = 0;
+    });
+    await waitBubble("hier j'ai bu mon café", 25000);
+    await waitBubble("après le café", 25000);
+    const stats = await mockStats();
+    if (!(stats["/openai/v1/audio/transcriptions"] >= 1)) throw new Error(`Groq n'a pas été appelé : ${JSON.stringify(stats)}`);
     await noBlockingError();
   });
   await page.context().close();

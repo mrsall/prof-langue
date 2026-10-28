@@ -1,6 +1,7 @@
 import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
-import { getCostSettings } from "@/lib/settings";
-import { isLanguage } from "@/config/personalities";
+import { getCostSettings, getLevel, LEVELS, saveLevel } from "@/lib/settings";
+import { isLanguage, type Language } from "@/config/personalities";
+import type { Sql } from "postgres";
 
 export const maxDuration = 30;
 
@@ -22,9 +23,65 @@ type Body = {
   words?: { en: string; fr: string }[];
   encouragement?: string | null;
   level?: string | null;
+  /** Niveau observé par le bilan sur cette séance (A1 à C2). */
+  observedLevel?: string | null;
   /** "elevenlabs" (minutes payantes) ou "eco" (téléphone + Claude, gratuit). */
   engine?: string;
 };
+
+/** Courbe de progression : où en est Cherif par rapport au niveau enregistré. */
+export type Progression = {
+  language: Language;
+  /** Niveau observé sur cette séance. */
+  observed: string;
+  /** Niveau enregistré avant cette séance (null : pas encore de test). */
+  current: string | null;
+  /** Séances de suite (celle-ci comprise) jugées au-dessus du niveau enregistré. */
+  streak: number;
+  needed: number;
+  /** Nouveau niveau atteint grâce à cette séance, sinon null. */
+  promoted: string | null;
+};
+
+/** Nombre de séances de suite au-dessus du niveau pour passer au niveau suivant. */
+const SESSIONS_TO_LEVEL_UP = 3;
+/** Une séance compte si elle est assez longue et si Cherif a vraiment parlé. */
+const MIN_SECONDS = 180;
+const MIN_TURNS = 6;
+
+/**
+ * Le niveau monte d'un cran quand plusieurs séances de suite sont jugées au-dessus
+ * du niveau enregistré ; il ne redescend jamais tout seul (le test mensuel s'en charge).
+ */
+async function updateProgression(sql: Sql, language: Language, observed: string, seconds: number, userTurns: number): Promise<Progression | null> {
+  const idx = (l: string | null | undefined) => (l ? (LEVELS as readonly string[]).indexOf(l) : -1);
+  if (idx(observed) < 0 || seconds < MIN_SECONDS || userTurns < MIN_TURNS) return null;
+  const current = await getLevel(language);
+  const currentIdx = idx(current?.level);
+  const rows = await sql<{ observed_level: string }[]>`select observed_level from sessions
+    where language = ${language} and kind = 'conversation' and observed_level is not null
+      and seconds >= ${MIN_SECONDS} and user_turns >= ${MIN_TURNS}
+    order by started_at desc limit ${SESSIONS_TO_LEVEL_UP}`;
+  let streak = 0;
+  for (const r of rows) {
+    if (idx(r.observed_level) > currentIdx) streak++;
+    else break;
+  }
+  let promoted: string | null = null;
+  if (streak >= SESSIONS_TO_LEVEL_UP && currentIdx < LEVELS.length - 1) {
+    // Sans test de niveau : on retient le plus bas des niveaux observés (prudent) ; sinon un cran au-dessus.
+    const targetIdx = currentIdx < 0 ? Math.min(...rows.map((r) => idx(r.observed_level))) : currentIdx + 1;
+    promoted = LEVELS[Math.max(0, targetIdx)];
+    await saveLevel(language, {
+      level: promoted,
+      date: new Date().toISOString(),
+      summary: `Niveau atteint par la progression en séance : ${SESSIONS_TO_LEVEL_UP} séances de suite jugées au-dessus de ${current?.level ?? "ton niveau de départ"}.`,
+      strengths: current?.strengths ?? [],
+      toWorkOn: current?.toWorkOn ?? [],
+    });
+  }
+  return { language, observed, current: current?.level ?? null, streak, needed: SESSIONS_TO_LEVEL_UP, promoted };
+}
 
 export async function POST(request: Request) {
   if (!dbAvailable()) return Response.json({ saved: false });
@@ -41,15 +98,25 @@ export async function POST(request: Request) {
     const cost = await getCostSettings();
     const engine = body.engine === "eco" ? "eco" : "elevenlabs";
     const costFcfa = engine === "eco" ? 0 : Math.round((seconds / 60) * cost.perMinuteFcfa);
+    const userTurns = Math.round(Number(body.userTurns ?? 0));
+    const observed = typeof body.observedLevel === "string" && /^[ABC][12]$/.test(body.observedLevel) ? body.observedLevel : null;
     const rows = await sql<{ id: number }[]>`insert into sessions
-      (kind, language, personality, topic, seconds, user_turns, user_share, transcript, corrections, errors, words, encouragement, level, cost_fcfa, engine)
+      (kind, language, personality, topic, seconds, user_turns, user_share, transcript, corrections, errors, words, encouragement, level, observed_level, cost_fcfa, engine)
       values (${body.kind ?? "conversation"}, ${language}, ${body.personality ?? "ami"}, ${body.topic ?? null}, ${seconds},
-        ${Math.round(Number(body.userTurns ?? 0))}, ${Math.round(Number(body.userShare ?? 0))},
+        ${userTurns}, ${Math.round(Number(body.userShare ?? 0))},
         ${sql.json((body.transcript ?? []) as never)}, ${sql.json((body.corrections ?? []) as never)},
         ${sql.json((body.errors ?? []) as never)}, ${sql.json((body.words ?? []) as never)},
-        ${body.encouragement ?? null}, ${body.level ?? null}, ${costFcfa}, ${engine})
+        ${body.encouragement ?? null}, ${body.level ?? null}, ${observed}, ${costFcfa}, ${engine})
       returning id`;
     const sessionId = rows[0]?.id ?? null;
+    let progression: Progression | null = null;
+    if (observed && (body.kind ?? "conversation") === "conversation") {
+      try {
+        progression = await updateProgression(sql, language, observed, seconds, userTurns);
+      } catch (error) {
+        console.error("Progression du niveau", error);
+      }
+    }
 
     const words = (body.words ?? []).filter((w) => w && typeof w.en === "string" && w.en.trim());
     for (const w of words.slice(0, 8)) {
@@ -61,7 +128,7 @@ export async function POST(request: Request) {
     for (const e of errors.slice(0, 5)) {
       await sql`insert into errors (session_id, language, wrong, "right", tip) values (${sessionId}, ${language}, ${e.wrong}, ${e.right}, ${e.tip ?? ""})`;
     }
-    return Response.json({ saved: true, id: sessionId, costFcfa, wordsAdded: words.length });
+    return Response.json({ saved: true, id: sessionId, costFcfa, wordsAdded: words.length, progression });
   } catch (error) {
     return Response.json({ saved: false, error: dbErrorMessage(error) }, { status: 502 });
   }

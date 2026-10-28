@@ -23,6 +23,8 @@ import { useLocalStorage } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
+import type { Progression } from "@/app/api/sessions/route";
+import { EAR_CHOICES, EAR_CHOICE_KEY, parseEarChoice, type EarChoice } from "@/lib/ear";
 import type { ReglagesState } from "@/app/api/reglages/route";
 import type { SessionKind, ReviewWord, Rematch } from "@/lib/prompt";
 import { levelIsStale, type LevelInfo } from "@/lib/levels";
@@ -109,6 +111,8 @@ function AppInner() {
   const engine: Engine = savedEngine === "eco" ? "eco" : "elevenlabs";
   const [savedVoiceChoice, setSavedVoiceChoice] = useLocalStorage(VOICE_CHOICE_KEY);
   const voiceChoice: VoiceChoice = parseVoiceChoice(savedVoiceChoice);
+  const [savedEarChoice, setSavedEarChoice] = useLocalStorage(EAR_CHOICE_KEY);
+  const earChoice: EarChoice = parseEarChoice(savedEarChoice);
   const [savedLanguage, setSavedLanguage] = useLocalStorage(LANGUAGE_KEY);
   const language: Language = isLanguage(savedLanguage) ? savedLanguage : "en";
   const [savedMode, setSavedMode] = useLocalStorage(MODE_KEY);
@@ -131,6 +135,8 @@ function AppInner() {
   const [levelResult, setLevelResult] = useState<(LevelInfo & { error?: string }) | null>(null);
   const [capPrompt, setCapPrompt] = useState<Partial<SessionParams> | null>(null);
   const [savedCost, setSavedCost] = useState<number | null>(null);
+  // Courbe de progression renvoyée par le serveur après l'enregistrement de la séance.
+  const [progression, setProgression] = useState<Progression | null>(null);
   const [summary, setSummary] = useState<{
     seconds: number;
     userTurns: number;
@@ -430,6 +436,7 @@ function AppInner() {
           }
           const eng = new EcoEngine({
             speaker,
+            ear: earChoice,
             body: {
               personality: p.personality.id,
               language: p.language,
@@ -569,7 +576,7 @@ function AppInner() {
         setPreparing(false);
       }
     },
-    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine, voiceChoice, showToast],
+    [personality, language, correction, speed, connectionType, startSession, ensureAgentConfigured, ensureFrenchVoices, history, engine, handsFree, pushLine, voiceChoice, earChoice, showToast],
   );
 
   useEffect(() => {
@@ -585,6 +592,7 @@ function AppInner() {
       setSummary(null);
       setLevelResult(null);
       setSavedCost(null);
+      setProgression(null);
       void start({ params });
     },
     [start],
@@ -787,10 +795,12 @@ function AppInner() {
             ],
             encouragement: result?.encouragement ?? null,
             level: level?.level || null,
+            observedLevel: result?.level ?? null,
           }),
         });
-        const data = (await res.json().catch(() => ({}))) as { saved?: boolean; costFcfa?: number };
+        const data = (await res.json().catch(() => ({}))) as { saved?: boolean; costFcfa?: number; progression?: Progression | null };
         if (data.saved && typeof data.costFcfa === "number") setSavedCost(data.costFcfa);
+        if (data.saved) setProgression(data.progression ?? null);
       } catch {
         // la séance reste dans l'historique du téléphone
       }
@@ -834,6 +844,8 @@ function AppInner() {
         onEngineChange={setSavedEngine}
         voiceChoice={voiceChoice}
         onVoiceChoiceChange={setSavedVoiceChoice}
+        earChoice={earChoice}
+        onEarChoiceChange={setSavedEarChoice}
         streak={remote?.db && remote.streak != null ? Math.max(remote.streak, progress.streak) : progress.streak}
         minutesToday={remote?.db ? Math.max(remote.todayMinutes, progress.minutesToday) : progress.minutesToday}
         goalMinutes={progress.goalMinutes}
@@ -879,6 +891,7 @@ function AppInner() {
         levelResult={levelResult}
         transcript={transcript}
         costFcfa={savedCost}
+        progression={progression}
         onAgain={() => setPhase("topic")}
         onHome={() => setPhase("home")}
         onRematch={(rematch) => {
@@ -1170,6 +1183,8 @@ function HomeScreen({
   onEngineChange,
   voiceChoice,
   onVoiceChoiceChange,
+  earChoice,
+  onEarChoiceChange,
   streak,
   minutesToday,
   goalMinutes,
@@ -1192,6 +1207,8 @@ function HomeScreen({
   onEngineChange: (e: Engine) => void;
   voiceChoice: VoiceChoice;
   onVoiceChoiceChange: (v: VoiceChoice) => void;
+  earChoice: EarChoice;
+  onEarChoiceChange: (e: EarChoice) => void;
   streak: number;
   minutesToday: number;
   goalMinutes: number;
@@ -1384,6 +1401,21 @@ function HomeScreen({
                   ))}
                 </div>
                 <p className="px-1 text-xs text-muted">{VOICE_CHOICES.find((v) => v.key === voiceChoice)?.hint}</p>
+                <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Oreille du mode éco">
+                  {EAR_CHOICES.map((e) => (
+                    <button
+                      key={e.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={earChoice === e.key}
+                      onClick={() => onEarChoiceChange(e.key)}
+                      className={`h-10 rounded-lg px-1 text-xs font-medium leading-tight ${earChoice === e.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                    >
+                      {e.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="px-1 text-xs text-muted">Oreille : {EAR_CHOICES.find((e) => e.key === earChoice)?.hint}</p>
               </>
             )}
           </div>
@@ -1582,6 +1614,7 @@ function BilanScreen({
   levelResult,
   transcript,
   costFcfa,
+  progression,
   onAgain,
   onHome,
   onRematch,
@@ -1596,6 +1629,7 @@ function BilanScreen({
   levelResult: (LevelInfo & { error?: string }) | null;
   transcript: TranscriptLine[];
   costFcfa: number | null;
+  progression: Progression | null;
   onAgain: () => void;
   onHome: () => void;
   onRematch: (rematch: Rematch) => void;
@@ -1679,6 +1713,33 @@ function BilanScreen({
         <section className="flex items-center gap-3 rounded-2xl border border-line bg-elevated p-3">
           <PersonaAvatar style={personality.avatar} size={56} label={displayName} />
           <p className="text-sm leading-snug">{encouragement}</p>
+        </section>
+      )}
+
+      {kind !== "test" && (progression || bilan?.level) && (
+        <section className={`flex flex-col gap-1 rounded-2xl border p-4 ${progression?.promoted ? "border-speaking/50 bg-speaking/10" : "border-line bg-elevated"}`}>
+          {progression?.promoted ? (
+            <>
+              <p className="text-base font-bold">Tu passes au niveau {progression.promoted} en {language === "en" ? "anglais" : "français"} !</p>
+              <p className="text-sm text-muted">Trois séances de suite au-dessus de {progression.current ?? "ton niveau de départ"} : les personnages montent d&apos;un cran dès la prochaine fois.</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm">
+                Niveau observé aujourd&apos;hui : <strong>{progression?.observed ?? bilan?.level}</strong>
+                {progression?.current ? <> · niveau enregistré : <strong>{progression.current}</strong></> : null}
+              </p>
+              {bilan?.levelWhy && <p className="text-xs text-muted">{bilan.levelWhy}</p>}
+              {progression && progression.streak > 0 && progression.streak < progression.needed && (
+                <p className="text-xs text-muted">
+                  Encore {progression.needed - progression.streak} séance{progression.needed - progression.streak > 1 ? "s" : ""} comme celle-ci et tu montes d&apos;un niveau.
+                </p>
+              )}
+              {progression && progression.streak === 0 && progression.current && (
+                <p className="text-xs text-muted">Trois séances de suite jugées au-dessus de {progression.current} font monter ton niveau.</p>
+              )}
+            </>
+          )}
         </section>
       )}
 

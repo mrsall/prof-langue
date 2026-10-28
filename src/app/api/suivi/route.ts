@@ -17,6 +17,8 @@ export type SuiviData = {
   words: number;
   dueWords: number;
   levels: { en: string | null; fr: string | null };
+  /** Courbe de progression : niveau observé à chaque séance comptée (plus récent d'abord). */
+  progression: { day: string; language: string; level: string }[];
   byMode: { personality: string; minutes: number }[];
   monthFcfa: number;
   /** V4 : prononciation (vide tant qu'aucune phrase n'a été notée). */
@@ -34,6 +36,7 @@ export async function GET() {
     words: 0,
     dueWords: 0,
     levels: { en: null, fr: null },
+    progression: [],
     byMode: [],
     monthFcfa: 0,
     pron: { attempts: 0, average: null, weeks: [], sounds: [] },
@@ -41,7 +44,7 @@ export async function GET() {
   if (!empty.db) return Response.json(empty);
   try {
     const sql = (await withTimeout(db(), 16000))!;
-    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds] = await withTimeout(Promise.all([
+    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression] = await withTimeout(Promise.all([
       sql<{ start: string; seconds: number }[]>`select to_char(date_trunc('week', started_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
@@ -62,6 +65,8 @@ export async function GET() {
         where created_at > now() - interval '30 days'`,
       sql<{ language: string; phoneme: string; attempts: number; score: number }[]>`select language, phoneme, attempts,
         (score_sum / greatest(attempts, 1))::int as score from pron_sounds where attempts >= 3 order by 4 asc limit 6`,
+      sql<{ day: string; language: string; level: string }[]>`select to_char(started_at at time zone 'Africa/Dakar', 'YYYY-MM-DD') as day, language, observed_level as level
+        from sessions where observed_level is not null and kind = 'conversation' and seconds >= 180 order by started_at desc limit 14`,
     ]), 20000);
     return Response.json({
       ...empty,
@@ -72,6 +77,7 @@ export async function GET() {
       words: words[0]?.n ?? 0,
       dueWords: due[0]?.n ?? 0,
       levels: { en: en?.level ?? null, fr: fr?.level ?? null },
+      progression,
       byMode: byMode.map((m) => ({ personality: m.personality, minutes: Math.round(m.seconds / 60) })),
       monthFcfa: Math.round(month[0]?.fcfa ?? 0),
       pron: {

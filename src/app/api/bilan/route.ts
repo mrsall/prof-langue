@@ -33,11 +33,14 @@ export type BilanResult = {
   encouragement: string | null;
   suggestTeacher: boolean;
   teacherFocus: string | null;
+  /** Niveau (A1 à C2) observé sur les lignes de Cherif dans cette séance, pour la courbe de progression. */
+  level: string | null;
+  levelWhy: string | null;
 };
 
 
 function emptyBilan(available: boolean): BilanResult {
-  return { available, words: [], errors: [], corrections: [], upgrades: [], debate: null, encouragement: null, suggestTeacher: false, teacherFocus: null };
+  return { available, words: [], errors: [], corrections: [], upgrades: [], debate: null, encouragement: null, suggestTeacher: false, teacherFocus: null, level: null, levelWhy: null };
 }
 
 function systemPrompt(language: Language, name: string, recapHint: string | undefined) {
@@ -45,7 +48,7 @@ function systemPrompt(language: Language, name: string, recapHint: string | unde
   return `You help Cherif, a French speaker from Senegal, improve his spoken ${target}. You receive the transcript of a spoken conversation between Cherif and ${name}.
 
 Return ONLY a JSON object, no prose, no code fences, with this exact shape:
-{"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"upgrades":[{"used":"...","better":"...","why":"..."}],"debate":null,"encouragement":"...","suggestTeacher":false,"teacherFocus":"..."}
+{"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"upgrades":[{"used":"...","better":"...","why":"..."}],"debate":null,"encouragement":"...","suggestTeacher":false,"teacherFocus":"...","level":"B1","levelWhy":"..."}
 
 - "words": 3 to 5 useful ${target} words or short expressions from the conversation (ones ${name} introduced, ones Cherif asked for, or correct forms he can reuse). The key "en" holds the ${target} form, "fr" a short French translation or explanation. Beginner-friendly. No duplicates.
 - "errors": up to 3 of Cherif's most useful mistakes to fix (grammar, vocabulary, word order), each with "wrong" (what he said), "right" (the correct form) and "tip" (one short sentence in French explaining the rule). Empty array if none. Never about accent or pronunciation (you only see text).
@@ -55,6 +58,7 @@ Return ONLY a JSON object, no prose, no code fences, with this exact shape:
 - "encouragement": one or two sentences in ${target}, in ${name}'s own voice and tone, pointing to one precise thing Cherif did well. Be honest: if the session was weak, say what he did well without inflating it, and name the one thing to work on. Never mention accent.
 - "suggestTeacher": true only if there were many mistakes (roughly 4 or more clear recurring ones) and a lesson with a teacher would help.
 - "teacherFocus": if suggestTeacher is true, a short French phrase naming the 1 or 2 points to work on (e.g. "le passé et les questions"), else null.
+- "level": Cherif's spoken ${target} level in THIS conversation on the CEFR scale ("A1","A2","B1","B2","C1" or "C2"), judged only on his own lines: range of vocabulary, grammar control, length and complexity of his turns, ability to narrate, argue and nuance. Ignore punctuation and obvious speech-to-text glitches. Be fair, neither flattering nor harsh. "levelWhy": one short sentence in French justifying it.
 ${recapHint ? `\nExtra guidance for this mode: ${recapHint}` : ""}`;
 }
 
@@ -112,6 +116,8 @@ function parseResult(text: string): BilanResult {
       encouragement: isStr(parsed.encouragement) ? parsed.encouragement : null,
       suggestTeacher: parsed.suggestTeacher === true,
       teacherFocus: isStr(parsed.teacherFocus) ? parsed.teacherFocus : null,
+      level: isStr(parsed.level) && /^[ABC][12]$/.test(parsed.level.trim().toUpperCase()) ? parsed.level.trim().toUpperCase() : null,
+      levelWhy: isStr(parsed.levelWhy) ? parsed.levelWhy.slice(0, 200) : null,
     };
   } catch {
     return emptyBilan(true);

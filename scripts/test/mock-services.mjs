@@ -92,6 +92,8 @@ function claudeAnswer(body) {
       encouragement: french ? "Belle séance, Cherif. Tu as raconté au passé sans aide." : "Nice work, Cherif. Clear past tense.",
       suggestTeacher: false,
       teacherFocus: null,
+      level: "B1",
+      levelWhy: "Il raconte au passé avec des phrases complètes, quelques erreurs d'accord.",
     });
   }
   // Réplique du mode éco.
@@ -152,6 +154,11 @@ const server = http.createServer(async (req, res) => {
       stop_sequence: null,
       usage: { input_tokens: 10, output_tokens: 10 },
     });
+  }
+
+  // ---- Groq (Whisper)
+  if (req.method === "POST" && path === "/openai/v1/audio/transcriptions") {
+    return json(res, 200, { text: "hier j'ai bu mon café", words: [{ word: "hier", start: 0.1, end: 0.4 }, { word: "j'ai", start: 0.5, end: 0.7 }, { word: "bu", start: 0.8, end: 0.9 }, { word: "mon", start: 1.0, end: 1.2 }, { word: "café", start: 1.3, end: 1.7 }] });
   }
 
   // ---- Google (Gemini)
