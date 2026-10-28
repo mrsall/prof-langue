@@ -217,10 +217,10 @@ export function Shadowing() {
       return;
     }
     const audio = getAudio();
-    const gemini = voiceChoice === "gemini";
-    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof&engine=${gemini ? "gemini" : "eleven"}`;
-    // La voix Google arrive à vitesse normale : « Lentement » se fait à la lecture, sans changer la hauteur de la voix.
-    audio.playbackRate = gemini ? Math.max(0.7, Math.min(1.2, speed)) : 1;
+    const serverEngine = voiceChoice === "gemini" || voiceChoice === "pc" ? voiceChoice : "eleven";
+    audio.src = `/api/tts?text=${encodeURIComponent(text)}&lang=${language}&speed=${speed}&personality=prof&engine=${serverEngine}`;
+    // Les voix Google et PC arrivent à vitesse normale : « Lentement » se fait à la lecture, sans changer la hauteur de la voix.
+    audio.playbackRate = serverEngine === "eleven" ? 1 : Math.max(0.7, Math.min(1.2, speed));
     try {
       (audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
     } catch {

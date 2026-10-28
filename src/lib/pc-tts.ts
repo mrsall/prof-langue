@@ -1,0 +1,70 @@
+import type { Language } from "@/config/personalities";
+
+/**
+ * Voix « Mon PC » : le serveur Chatterbox qui tourne sur l'ordinateur de Cherif
+ * (dossier pc-voix/, carte NVIDIA), joint à travers un tunnel Tailscale.
+ * Gratuit, illimité, mais seulement quand le PC est allumé : l'appelant prévoit
+ * toujours le repli sur ElevenLabs.
+ */
+const TIMEOUT_MS = 20000;
+
+export function pcAvailable() {
+  return Boolean(process.env.PC_TTS_URL?.trim()) && Boolean(process.env.PC_TTS_TOKEN?.trim());
+}
+
+export function pcBaseUrl() {
+  return (process.env.PC_TTS_URL ?? "").trim().replace(/\/+$/, "");
+}
+
+/** Nom d'hôte affiché dans Réglages (jamais le mot de passe). */
+export function pcHost() {
+  try {
+    return pcBaseUrl() ? new URL(pcBaseUrl()).host : null;
+  } catch {
+    return pcBaseUrl() || null;
+  }
+}
+
+export type PcHealth = { ok: boolean; warm?: boolean; model?: string | null; device?: string; gpu?: string | null; voices?: string[]; error?: string | null };
+
+export async function pcHealth(timeoutMs = 6000): Promise<PcHealth> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${pcBaseUrl()}/health`, { signal: controller.signal, cache: "no-store" });
+    if (!res.ok) return { ok: false, error: `Le PC a répondu ${res.status}.` };
+    return (await res.json()) as PcHealth;
+  } catch (error) {
+    return { ok: false, error: error instanceof Error && error.name === "AbortError" ? "Le PC ne répond pas (éteint, ou tunnel Tailscale arrêté)." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function pcSpeak(options: { text: string; language: Language; voice: string }): Promise<{ wav: Buffer; generationMs: number | null }> {
+  if (!pcAvailable()) throw new Error("Voix du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${pcBaseUrl()}/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.PC_TTS_TOKEN!.trim()}` },
+      body: JSON.stringify({ text: options.text, language: options.language, voice: options.voice }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(error instanceof Error && error.name === "AbortError" ? "Le PC met trop de temps à répondre." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 200);
+    if (res.status === 401) throw new Error("Le PC refuse le mot de passe : PC_TTS_TOKEN doit être identique dans Vercel et dans pc-voix/.env.");
+    throw new Error(`Le PC a répondu ${res.status}${detail ? ` : ${detail}` : ""}`);
+  }
+  const wav = Buffer.from(await res.arrayBuffer());
+  if (wav.length < 100) throw new Error("Le PC a renvoyé un son vide.");
+  const gen = Number(res.headers.get("x-generation-ms"));
+  return { wav, generationMs: Number.isFinite(gen) && gen > 0 ? gen : null };
+}

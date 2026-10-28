@@ -1,0 +1,27 @@
+# Lance le serveur de voix sur la carte NVIDIA du PC.
+#   1. copie .env.example en .env et choisis un mot de passe (PC_TTS_TOKEN)
+#   2. docker compose up -d --build
+#   3. http://localhost:8765/health doit répondre { "ok": true }
+services:
+  voix:
+    build: .
+    container_name: prof-langue-voix
+    ports:
+      - "8765:8765"
+    env_file: .env
+    environment:
+      - CHATTERBOX_T3=v3
+    volumes:
+      - ./voix:/voix:ro
+      - modeles:/cache
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  modeles:

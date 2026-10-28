@@ -156,6 +156,24 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // ---- PC de Cherif (Chatterbox)
+  if (req.method === "GET" && path === "/pc/health") {
+    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami"], error: null });
+  }
+  if (req.method === "POST" && path === "/pc/tts") {
+    if (req.headers.authorization !== "Bearer test") return json(res, 401, { detail: "Mot de passe refusé." });
+    let body = {};
+    try {
+      body = JSON.parse(raw.toString("utf8") || "{}");
+    } catch {
+      return json(res, 400, { detail: "bad json" });
+    }
+    if (/PANNE/.test(body.text ?? "")) return json(res, 503, { detail: "GPU occupé" }); // simule un PC en difficulté
+    const wav = silentWav(0.4);
+    res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": String(wav.length), "X-Generation-Ms": "320" });
+    return res.end(wav);
+  }
+
   // ---- Groq (Whisper)
   if (req.method === "POST" && path === "/openai/v1/audio/transcriptions") {
     return json(res, 200, { text: "hier j'ai bu mon café", words: [{ word: "hier", start: 0.1, end: 0.4 }, { word: "j'ai", start: 0.5, end: 0.7 }, { word: "bu", start: 0.8, end: 0.9 }, { word: "mon", start: 1.0, end: 1.2 }, { word: "café", start: 1.3, end: 1.7 }] });
