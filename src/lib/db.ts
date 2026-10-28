@@ -129,6 +129,7 @@ const SCHEMA_STATEMENTS = [
   level text,
   cost_fcfa numeric not null default 0
 )`,
+  `alter table sessions add column if not exists observed_level text`,
   `create table if not exists words (
   id bigserial primary key,
   language text not null,
@@ -196,7 +197,8 @@ export async function schemaComplete(sql: Sql) {
     and to_regclass('public.errors') is not null
     and to_regclass('public.pron_attempts') is not null
     and to_regclass('public.pron_sounds') is not null
-    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'engine') as ok`;
+    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'engine')
+    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'observed_level') as ok`;
   return Boolean(row?.ok);
 }
 

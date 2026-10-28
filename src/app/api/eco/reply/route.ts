@@ -71,7 +71,7 @@ export async function POST(request: Request) {
   const tidy = (t: string) => t.replace(/\*\*|__|#+\s?/g, "").trim();
   try {
     // Réplique courte : pas de réflexion, plafond large (la réflexion, quand un modèle l'impose, compte dedans).
-    const first = await askClaude(client, { system, messages, maxTokens: 2048, effort: "low", thinking: "disabled" });
+    const first = await askClaude(client, { system, messages, maxTokens: 2048, effort: "medium", thinking: "disabled" });
     let text = tidy(first.text);
     if (text) return Response.json({ text });
 

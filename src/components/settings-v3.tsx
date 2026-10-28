@@ -265,6 +265,26 @@ export function SettingsV3() {
 
       <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
         <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Oreille Groq (gratuite)</h2>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.ears.groq ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>{state.ears.groq ? "Clé présente" : "À configurer"}</span>
+        </div>
+        {state.ears.groq ? (
+          <p className="text-sm text-muted">Choisis « Groq (gratuite) » comme oreille du mode éco sur l&apos;accueil : le téléphone enregistre, Whisper transcrit. Bien meilleure compréhension de l&apos;accent qu&apos;avec la reconnaissance du téléphone, pour une seconde de plus.</p>
+        ) : (
+          <div className="flex flex-col gap-2 text-sm text-muted">
+            <p>Une oreille qui comprend bien l&apos;accent, en français et en anglais, gratuite, sans carte bancaire (environ 8 heures d&apos;audio par jour) :</p>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>Va sur console.groq.com, crée un compte (adresse e-mail ou compte Google).</li>
+              <li>Menu « API Keys » → « Create API Key », copie la clé (elle commence par gsk_).</li>
+              <li>Dans Vercel → Settings → Environment Variables : ajoute <code className="font-mono">GROQ_API_KEY</code>, puis Redeploy.</li>
+              <li>Reviens ici : la carte passe à « Clé présente », puis choisis l&apos;oreille Groq sur l&apos;accueil.</li>
+            </ol>
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+        <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">Voix Google (gratuite)</h2>
           <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.gemini.configured ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>{state.gemini.configured ? "Clé présente" : "À configurer"}</span>
         </div>

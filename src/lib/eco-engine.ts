@@ -5,6 +5,7 @@ import type { TranscriptLine } from "@/lib/prompt";
 import { startWavRecorder, type WavRecorder } from "@/lib/recorder";
 import { LOCALES, recognizeOnce, speechRecognitionAvailable, type RecognizeHandle, type SpeakHandle } from "@/lib/speech";
 import type { Speaker } from "@/lib/voice-engine";
+import type { EarChoice } from "@/lib/ear";
 
 /**
  * Mode éco : la conversation sans ElevenLabs Agents.
@@ -36,6 +37,8 @@ export type EcoOptions = {
   language: Language;
   /** Qui lit les répliques (ElevenLabs, Kokoro ou le téléphone). */
   speaker: Speaker;
+  /** Qui écoute : le téléphone, ou enregistrement + transcription (Groq, Scribe). */
+  ear?: EarChoice;
   rate: number;
   handsFree: boolean;
   /** Historique déjà échangé (reprise après changement de réglage). */
@@ -82,8 +85,11 @@ export class EcoEngine {
     this.history = [...(options.history ?? [])];
     this.rate = options.rate;
     this.handsFree = options.handsFree;
-    this.phoneEar = speechRecognitionAvailable();
+    this.ear = options.ear ?? "phone";
+    this.phoneEar = this.ear === "phone" && speechRecognitionAvailable();
   }
+
+  private readonly ear: EarChoice;
 
   /** Oreille du téléphone (sinon enregistrement WAV + Scribe). Peut basculer en cours de séance. */
   get usesPhoneRecognition() {
@@ -390,6 +396,7 @@ export class EcoEngine {
       const form = new FormData();
       form.append("audio", blob, "parole.wav");
       form.append("language", this.options.language);
+      form.append("engine", this.ear === "phone" ? "auto" : this.ear);
       const res = await fetch("/api/stt", { method: "POST", body: form });
       const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
       if (token !== this.listenToken || this.ended) return;

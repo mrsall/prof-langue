@@ -1,7 +1,7 @@
 import { findPersonality, isLanguage, pickFirstMessage, type Language, type Personality } from "@/config/personalities";
 import { isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
 import { buildPrompt, type MemoryItem, type PastError, type Rematch, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
-import { getLevel, LEVEL_DESCRIPTIONS } from "@/lib/settings";
+import { getLevel, LEVEL_DESCRIPTIONS, LEVELS } from "@/lib/settings";
 import { db, dbAvailable, withTimeout } from "@/lib/db";
 
 /**
@@ -85,10 +85,12 @@ export async function prepareSession(body: SessionBody): Promise<PreparedSession
       pastErrors = errs.map((e) => ({ wrong: e.wrong, right: e.right }));
       if (info) {
         const desc = LEVEL_DESCRIPTIONS[info.level]?.[language];
+        const idx = LEVELS.indexOf(info.level as (typeof LEVELS)[number]);
+        const next = idx >= 0 && idx < LEVELS.length - 1 ? LEVELS[idx + 1] : info.level;
         levelText =
           language === "en"
-            ? `His current English level is ${info.level} (${desc ?? ""}). Adapt your vocabulary and speed to that level and raise it slowly.`
-            : `Son niveau actuel en français parlé est ${info.level} (${desc ?? ""}). Adapte ton vocabulaire à ce niveau et élève-le progressivement.`;
+            ? `His current English level is ${info.level} (${desc ?? ""}). Speak one notch above it (${next}): that is how he progresses. During the session, if his answers are long and right, go deeper still (bigger topics, tougher questions, arguments and counter-arguments); if he struggles, come back down.`
+            : `Son niveau actuel en français parlé est ${info.level} (${desc ?? ""}). Parle un cran au-dessus (${next}) : c'est comme ça qu'il progresse. Pendant la séance, si ses réponses sont longues et justes, va encore plus loin (sujets plus profonds, questions plus exigeantes, arguments et contre-arguments) ; s'il peine, redescends.`;
       }
     } catch (error) {
       console.error("Niveau indisponible", error);
