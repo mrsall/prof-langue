@@ -4,6 +4,7 @@ import { resolveVoiceId } from "@/lib/tts-voices";
 import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
 import { geminiAvailable, geminiSpeak } from "@/lib/gemini";
 import { geminiVoiceFor } from "@/config/gemini-voices";
+import { pcAvailable, pcSpeak } from "@/lib/pc-tts";
 
 export const maxDuration = 30;
 
@@ -19,7 +20,21 @@ const MODEL = process.env.ELEVENLABS_TTS_MODEL || "eleven_flash_v2_5";
 export async function GET(request: Request) {
   await connection();
   const url = new URL(request.url);
-  const engine = url.searchParams.get("engine") === "gemini" ? "gemini" : "eleven";
+  const wanted = url.searchParams.get("engine");
+  const engine = wanted === "gemini" ? "gemini" : wanted === "pc" ? "pc" : "eleven";
+  if (engine === "pc") {
+    const text = (url.searchParams.get("text") ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
+    const language = isLanguage(url.searchParams.get("lang")) ? (url.searchParams.get("lang") as "en" | "fr") : "en";
+    if (!text) return Response.json({ error: "Texte manquant." }, { status: 400 });
+    if (!pcAvailable()) return Response.json({ error: "Voix du PC non configurée : PC_TTS_URL et PC_TTS_TOKEN dans Vercel (voir pc-voix/README.md)." }, { status: 503 });
+    try {
+      const voice = url.searchParams.get("role") === "judge" ? "juge" : url.searchParams.get("personality") || "prof";
+      const { wav } = await pcSpeak({ text, language, voice });
+      return new Response(new Uint8Array(wav), { headers: { "Content-Type": "audio/wav", "Cache-Control": "private, max-age=86400", "Content-Length": String(wav.length) } });
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Voix du PC indisponible." }, { status: 502 });
+    }
+  }
   if (engine === "gemini") {
     const text = (url.searchParams.get("text") ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
     const language = isLanguage(url.searchParams.get("lang")) ? (url.searchParams.get("lang") as "en" | "fr") : "en";

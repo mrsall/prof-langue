@@ -53,6 +53,8 @@ const env = {
   GEMINI_API_KEY: "test",
   GEMINI_API_BASE: `http://localhost:${MOCK_PORT}`,
   GROQ_API_KEY: "test",
+  PC_TTS_URL: `http://localhost:${MOCK_PORT}/pc`,
+  PC_TTS_TOKEN: "test",
   GROQ_API_BASE: `http://localhost:${MOCK_PORT}`,
   MOCK_PORT: String(MOCK_PORT),
 };

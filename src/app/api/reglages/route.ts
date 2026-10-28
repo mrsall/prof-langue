@@ -6,6 +6,7 @@ import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings
 import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
 import { geminiAvailable } from "@/lib/gemini";
 import { groqAvailable } from "@/lib/groq-stt";
+import { pcAvailable, pcHost } from "@/lib/pc-tts";
 import { sttAvailable } from "@/lib/stt";
 
 /**
@@ -33,6 +34,8 @@ export type ReglagesState = {
   gemini: { configured: boolean };
   /** Oreilles du mode éco : Groq (Whisper, gratuit) et Scribe (ElevenLabs). */
   ears: { groq: boolean; scribe: boolean };
+  /** Voix « Mon PC » (Chatterbox sur l'ordinateur de Cherif). */
+  pc: { configured: boolean; host: string | null };
 };
 
 export async function GET() {
@@ -53,6 +56,7 @@ export async function GET() {
     schemaSql: SCHEMA_SQL,
     gemini: { configured: geminiAvailable() },
     ears: { groq: groqAvailable(), scribe: sttAvailable() },
+    pc: { configured: pcAvailable(), host: pcHost() },
   };
   if (!state.db) return Response.json(state);
   try {

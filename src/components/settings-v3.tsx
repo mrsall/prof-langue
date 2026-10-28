@@ -149,6 +149,24 @@ export function SettingsV3() {
   };
 
   const [gemini, setGemini] = useState<{ ok: boolean; model: string | null; ms: number; error: string | null } | null>(null);
+  const [pc, setPc] = useState<{ ok: boolean; gpu: string | null; model: string | null; voices: string[]; ms: number; generationMs: number | null; error: string | null } | null>(null);
+  const [pcBusy, setPcBusy] = useState(false);
+  const testPc = async () => {
+    setPcBusy(true);
+    try {
+      const res = await fetch("/api/diagnostic/pc");
+      const data = (await res.json()) as { ok: boolean; gpu: string | null; model: string | null; voices: string[]; ms: number; generationMs: number | null; error: string | null };
+      setPc(data);
+      if (data.ok) {
+        const audio = new Audio(`/api/tts?engine=pc&lang=fr&personality=prof&text=${encodeURIComponent("Bonjour Cherif, je suis la voix de ton PC. On commence quand tu veux.")}`);
+        void audio.play().catch(() => undefined);
+      }
+    } catch {
+      setPc({ ok: false, gpu: null, model: null, voices: [], ms: 0, generationMs: null, error: "impossible de joindre le serveur de l'app" });
+    } finally {
+      setPcBusy(false);
+    }
+  };
   const [geminiBusy, setGeminiBusy] = useState(false);
   const testGemini = async () => {
     setGeminiBusy(true);
@@ -259,6 +277,37 @@ export function SettingsV3() {
             </p>
             {claude.sample && <p className="mt-1">« {claude.sample} »</p>}
             {claude.error && <p className="mt-1 text-danger">{claude.error}</p>}
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Voix de mon PC (gratuite)</h2>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.pc.configured ? "bg-speaking/15 text-speaking" : "bg-listening/15 text-listening"}`}>{state.pc.configured ? "Configurée" : "À configurer"}</span>
+        </div>
+        {state.pc.configured ? (
+          <>
+            <p className="text-sm text-muted">
+              Chatterbox sur ta carte NVIDIA, joint sur <span className="font-mono text-xs">{state.pc.host}</span>. Choisis « Mon PC » comme voix du mode éco sur l&apos;accueil. PC éteint : ElevenLabs prend le relais tout seul.
+            </p>
+            <button type="button" disabled={pcBusy} onClick={testPc} className="h-11 rounded-xl border border-line bg-bg text-sm font-bold disabled:opacity-60">
+              {pcBusy ? "Test en cours…" : "Tester la voix de mon PC (elle parle)"}
+            </button>
+            {pc && (
+              <p className={`rounded-xl bg-bg px-3 py-2 font-mono text-xs ${pc.ok ? "text-muted" : "text-danger"}`}>
+                {pc.ok ? `${pc.gpu ?? "GPU ?"} · ${pc.model ?? "modèle ?"} · ${pc.generationMs ?? "?"} ms de synthèse, ${pc.ms} ms au total${pc.voices.length ? ` · voix : ${pc.voices.join(", ")}` : " · voix par défaut"}` : pc.error}
+              </p>
+            )}
+          </>
+        ) : (
+          <div className="flex flex-col gap-2 text-sm text-muted">
+            <p>Une voix naturelle, illimitée et gratuite, fabriquée par la carte graphique de ton PC à la maison (Windows, NVIDIA) :</p>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>Sur le PC, suis le guide <code className="font-mono">pc-voix/README.md</code> du dépôt : Docker Desktop, Tailscale, puis <code className="font-mono">docker compose up -d --build</code>.</li>
+              <li>Dans Vercel → Settings → Environment Variables : <code className="font-mono">PC_TTS_URL</code> (adresse Tailscale du PC) et <code className="font-mono">PC_TTS_TOKEN</code> (le mot de passe choisi), puis Redeploy.</li>
+              <li>Reviens ici : la carte passe à « Configurée » et un bouton te fait entendre la voix.</li>
+            </ol>
           </div>
         )}
       </section>

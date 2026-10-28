@@ -13,19 +13,20 @@ import { speakText, speechSynthesisAvailable, splitVoiceSegments, type SpeakHand
  *               (le français bascule sur ElevenLabs) ;
  *  - "phone"  : voix de synthèse du téléphone, gratuite, de dépannage.
  */
-export type VoiceChoice = "eleven" | "gemini" | "kokoro" | "phone";
+export type VoiceChoice = "eleven" | "gemini" | "pc" | "kokoro" | "phone";
 
 export const VOICE_CHOICE_KEY = "prof-langue:voice-choice";
 
 export const VOICE_CHOICES: { key: VoiceChoice; label: string; hint: string }[] = [
   { key: "eleven", label: "ElevenLabs", hint: "Voix naturelle des deux langues. Consomme des caractères de ton abonnement, bien moins chers que les minutes de conversation." },
   { key: "gemini", label: "Google (gratuite)", hint: "Voix Google naturelle, français et anglais, gratuite avec une clé Google AI Studio (Réglages). Si elle manque, ElevenLabs prend le relais." },
+  { key: "pc", label: "Mon PC (gratuite)", hint: "Chatterbox sur la carte graphique de ton PC à la maison (dossier pc-voix) : naturelle, illimitée, français et anglais. PC éteint ou injoignable : ElevenLabs prend le relais." },
   { key: "kokoro", label: "Kokoro (anglais, gratuit)", hint: "Voix naturelle fabriquée dans le téléphone, zéro crédit. Anglais seulement : le français passe par ElevenLabs. 90 Mo à charger la première fois." },
   { key: "phone", label: "Téléphone", hint: "Voix de synthèse du téléphone, gratuite, moins agréable. Utile sans réseau rapide." },
 ];
 
 export function parseVoiceChoice(raw: string | null | undefined): VoiceChoice {
-  return raw === "kokoro" || raw === "phone" || raw === "gemini" ? raw : "eleven";
+  return raw === "kokoro" || raw === "phone" || raw === "gemini" || raw === "pc" ? raw : "eleven";
 }
 
 export type Speaker = {
@@ -189,8 +190,8 @@ function phoneSpeaker(language: Language): Speaker {
   };
 }
 
-/** Voix fabriquée par le serveur (/api/tts) : ElevenLabs, ou Google avec repli ElevenLabs. */
-function serverSpeaker(engine: "eleven" | "gemini", language: Language, personalityId: string | null): Speaker {
+/** Voix fabriquée par le serveur (/api/tts) : ElevenLabs, ou Google / le PC de Cherif avec repli ElevenLabs. */
+function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, personalityId: string | null): Speaker {
   const fallback = speechSynthesisAvailable() ? phoneSpeaker(language) : null;
   return {
     choice: engine,
@@ -210,9 +211,9 @@ function serverSpeaker(engine: "eleven" | "gemini", language: Language, personal
           engine,
         });
         let res = await fetch(`/api/tts?${q.toString()}`);
-        if (!res.ok && engine === "gemini") {
-          // Voix Google indisponible (clé absente, quota) : ElevenLabs lit cette réplique.
-          console.warn("Voix Google indisponible, repli ElevenLabs");
+        if (!res.ok && engine !== "eleven") {
+          // Voix Google ou PC indisponible (clé absente, quota, PC éteint) : ElevenLabs lit cette réplique.
+          console.warn(engine === "pc" ? "Voix du PC indisponible, repli ElevenLabs" : "Voix Google indisponible, repli ElevenLabs");
           q.set("engine", "eleven");
           res = await fetch(`/api/tts?${q.toString()}`);
         }
@@ -226,8 +227,8 @@ function serverSpeaker(engine: "eleven" | "gemini", language: Language, personal
         // Tous les morceaux se fabriquent en même temps ; le premier se joue dès qu'il est prêt.
         const jobs = segments.map((seg) => fetchPart(seg).then((url) => ({ url }), (error: unknown) => ({ error })));
         const dropRest = (from: number) => jobs.slice(from).forEach((j) => void j.then((r) => "url" in r && URL.revokeObjectURL(r.url)));
-        // ElevenLabs applique déjà la vitesse ; la voix Google est lue à vitesse réglée par le lecteur (hauteur conservée).
-        const playbackRate = engine === "gemini" ? clampRate(rate, 0.7, 1.2) : 1;
+        // ElevenLabs applique déjà la vitesse ; Google et le PC sont lus à vitesse réglée par le lecteur (hauteur conservée).
+        const playbackRate = engine === "eleven" ? 1 : clampRate(rate, 0.7, 1.2);
         for (let i = 0; i < jobs.length; i++) {
           const result = await jobs[i];
           if (cancelled) return dropRest(i);
@@ -315,6 +316,6 @@ export function createSpeaker(choice: VoiceChoice, options: { language: Language
   const personalityId = options.personalityId ?? null;
   if (choice === "phone") return phoneSpeaker(options.language);
   if (choice === "kokoro" && options.language === "en") return kokoroSpeaker(personalityId);
-  if (choice === "gemini") return serverSpeaker("gemini", options.language, personalityId);
+  if (choice === "gemini" || choice === "pc") return serverSpeaker(choice, options.language, personalityId);
   return serverSpeaker("eleven", options.language, personalityId);
 }

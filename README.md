@@ -11,6 +11,7 @@ Nouveau depuis la V3 :
 - **Suivi** : moyenne de prononciation sur 30 jours, évolution par semaine, sons les moins réussis (anglais et français).
 - **Rien à payer** : c'est la reconnaissance vocale de ton téléphone qui écoute (Google sur Android, Apple sur iPhone). L'app compare mot à mot avec la phrase modèle, et Claude explique en une phrase comment placer le son raté. Pour une note son par son plus fine, Azure Speech reste possible en option (voir « 2 ter »), mais ce n'est pas nécessaire.
 - **Mode éco pour la conversation** (accueil → « Micro et vitesse » → « Mode éco ») : le téléphone écoute gratuitement, Claude réfléchit, et seule la lecture de la réponse est confiée à la voix de ton choix. Zéro minute de conversation ElevenLabs. Pour interrompre le personnage, tu appuies sur le micro. Les personnages, la correction, le bilan et le carnet sont les mêmes.
+- **Voix « Mon PC », gratuite et illimitée** : le dossier `pc-voix/` fait tourner Chatterbox Multilingue (libre, MIT) sur la carte NVIDIA du PC de Cherif, dans Docker, joint par un tunnel Tailscale ; guide pas à pas Windows dans `pc-voix/README.md`. Dans Vercel : `PC_TTS_URL` et `PC_TTS_TOKEN`. PC éteint : repli automatique sur ElevenLabs.
 - **Oreille Groq (Whisper), gratuite** : avec une clé Groq (console.groq.com → API Keys, sans carte bancaire) mise dans Vercel sous le nom `GROQ_API_KEY`, l'oreille « Groq » du mode éco enregistre ta phrase et la fait transcrire par Whisper : bien meilleure compréhension de l'accent que la reconnaissance du téléphone, pour environ une seconde de plus. L'oreille « ElevenLabs » (Scribe) fait pareil en décomptant ton abonnement.
 - **Voix Google (Gemini), gratuite** : avec une clé Google AI Studio (aistudio.google.com → Get API key, sans carte bancaire) mise dans Vercel sous le nom `GEMINI_API_KEY`, la voix « Google (gratuite) » lit les répliques en français et en anglais, de façon naturelle. Réglages → carte « Voix Google » pour la tester. Si Google ne répond pas, ElevenLabs prend le relais.
 - **L'oreille écoute jusqu'au vrai silence** : la reconnaissance du téléphone coupait à la première pause d'une seconde ; l'app écoute maintenant en continu et considère la phrase finie après 1,8 s sans nouveau mot (en appui pour parler : jusqu'au relâchement).
@@ -88,6 +89,7 @@ Vercel → ton projet → **Settings** → **Environment Variables** :
 | `DATABASE_URL` | la chaîne de connexion Supabase (carnet, suivi, niveau, rappels) |
 | `GEMINI_API_KEY` | facultatif : clé Google AI Studio pour la voix Google gratuite |
 | `GROQ_API_KEY` | facultatif : clé Groq (gratuite, sans carte) pour l'oreille Whisper du mode éco |
+| `PC_TTS_URL`, `PC_TTS_TOKEN` | facultatif : adresse Tailscale et mot de passe du serveur de voix sur le PC de Cherif (`pc-voix/`) |
 | `AZURE_SPEECH_KEY` | facultatif : la clé KEY 1 d'une ressource Azure Speech (note son par son) |
 | `AZURE_SPEECH_REGION` | facultatif : la région de cette ressource, ex. `francecentral` |
 | `APP_PIN` | un code de ton choix pour protéger l'app (conseillé) |

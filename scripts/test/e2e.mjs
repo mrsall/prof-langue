@@ -228,6 +228,14 @@ try {
     const diag = await (await page.request.get(`${BASE}/api/diagnostic/gemini`)).json();
     if (!diag.ok || !/tts/.test(diag.model ?? "")) throw new Error(JSON.stringify(diag).slice(0, 200));
   });
+  await step("Voix « Mon PC » (/api/tts?engine=pc), diagnostic, et repli ElevenLabs si le PC flanche", async () => {
+    const res = await page.request.get(`${BASE}/api/tts?text=Bonjour&lang=fr&personality=prof&engine=pc`);
+    if (!res.ok() || !(res.headers()["content-type"] ?? "").startsWith("audio/wav")) throw new Error(`tts pc : HTTP ${res.status()} ${res.headers()["content-type"]}`);
+    const diag = await (await page.request.get(`${BASE}/api/diagnostic/pc`)).json();
+    if (!diag.ok || !/4070/.test(diag.gpu ?? "")) throw new Error(JSON.stringify(diag).slice(0, 200));
+    const down = await page.request.get(`${BASE}/api/tts?text=PANNE&lang=fr&personality=prof&engine=pc`);
+    if (down.ok()) throw new Error("un PC en panne devrait répondre une erreur (le téléphone bascule alors sur ElevenLabs)");
+  });
   await step("Diagnostic Claude : réponse avec du texte (le faux Claude rend une réponse vide si le plafond est trop bas)", async () => {
     const res = await page.request.get(`${BASE}/api/diagnostic/claude`);
     const data = await res.json();
@@ -411,6 +419,26 @@ try {
     const bubbles = await page.locator(transcript).allTextContents();
     const mine = bubbles.find((t) => /et après je suis sorti/.test(t)) ?? "";
     if (mine.toLowerCase() !== "hier j'ai bu mon café et après je suis sorti") throw new Error(`mots doublés ou manquants : « ${mine} »`);
+    await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Séance éco avec la voix du PC
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "pc", "prof-langue:language": "en", "prof-langue:mode": "ami" });
+  console.log("Séance éco avec la voix du PC (Chatterbox simulé), Max, anglais");
+  await step("Max parle avec la voix du PC, Cherif répond, Max enchaîne", async () => {
+    await mockStats(true);
+    await startSession("en", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    const header = await page.locator("header").first().textContent();
+    if (!/Mon/.test(header ?? "")) throw new Error(`en-tête : ${header}`);
+    await page.evaluate(() => {
+      window.__nextSpeech = "I watched a match yesterday";
+    });
+    await waitBubble("what did you do after", 25000);
+    const stats = await mockStats();
+    if (!(stats["/pc/tts"] >= 2)) throw new Error(`le PC n'a pas fabriqué les répliques : ${JSON.stringify(stats)}`);
+    if (fallbackWarnings.length) throw new Error(fallbackWarnings[0]);
     await noBlockingError();
   });
   await page.context().close();

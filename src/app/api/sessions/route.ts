@@ -58,9 +58,11 @@ async function updateProgression(sql: Sql, language: Language, observed: string,
   if (idx(observed) < 0 || seconds < MIN_SECONDS || userTurns < MIN_TURNS) return null;
   const current = await getLevel(language);
   const currentIdx = idx(current?.level);
+  // Seules les séances postérieures au dernier niveau enregistré (test ou passage) comptent pour le suivant.
+  const since = current?.date && !Number.isNaN(Date.parse(current.date)) ? new Date(current.date) : new Date(0);
   const rows = await sql<{ observed_level: string }[]>`select observed_level from sessions
     where language = ${language} and kind = 'conversation' and observed_level is not null
-      and seconds >= ${MIN_SECONDS} and user_turns >= ${MIN_TURNS}
+      and seconds >= ${MIN_SECONDS} and user_turns >= ${MIN_TURNS} and started_at > ${since}
     order by started_at desc limit ${SESSIONS_TO_LEVEL_UP}`;
   let streak = 0;
   for (const r of rows) {
