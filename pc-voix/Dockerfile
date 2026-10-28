@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 lib
 
 WORKDIR /app
 # 1) La version publiée (connue pour s'installer sans surprise) et toutes ses dépendances.
-RUN pip install --upgrade pip && pip install "chatterbox-tts==0.1.7" fastapi "uvicorn[standard]" soundfile
+RUN pip install --upgrade pip && pip install "chatterbox-tts==0.1.7" fastapi "uvicorn[standard]" soundfile python-multipart faster-whisper
 # 2) Le code plus récent du dépôt officiel (modèle multilingue v3, meilleur en français) par-dessus,
 #    sans toucher aux dépendances. Si ça ne s'importe pas, on revient à la version publiée :
 #    la construction n'échoue jamais pour ça.
@@ -22,6 +22,8 @@ RUN (pip install --no-deps "git+https://github.com/resemble-ai/chatterbox.git" \
     || (echo "Version récente indisponible, retour à chatterbox-tts 0.1.7" && pip install --force-reinstall --no-deps "chatterbox-tts==0.1.7")
 
 COPY server.py /app/server.py
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8765
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8765"]
+CMD ["/app/entrypoint.sh"]

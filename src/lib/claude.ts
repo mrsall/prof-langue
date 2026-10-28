@@ -44,18 +44,56 @@ export function textOf(response: Anthropic.Message) {
     .trim();
 }
 
-export async function askClaude(client: Anthropic, ask: ClaudeAsk): Promise<ClaudeAnswer> {
+function attemptsFor(ask: ClaudeAsk): Anthropic.MessageCreateParamsNonStreaming[] {
   const plain: Anthropic.MessageCreateParamsNonStreaming = {
     model: claudeModel(),
     max_tokens: ask.maxTokens ?? 2048,
     system: ask.system,
     messages: ask.messages,
   };
-  const attempts: Anthropic.MessageCreateParamsNonStreaming[] = [
+  return [
     { ...plain, output_config: { effort: ask.effort ?? "low" }, thinking: { type: ask.thinking ?? "disabled" } },
     { ...plain, output_config: { effort: ask.effort ?? "low" } },
     plain,
   ];
+}
+
+function toAnswer(response: Anthropic.Message): ClaudeAnswer {
+  return {
+    text: textOf(response),
+    stopReason: response.stop_reason ?? null,
+    model: response.model,
+    blocks: response.content.map((b) => b.type),
+    truncated: response.stop_reason === "max_tokens",
+  };
+}
+
+/**
+ * Même demande, mais le texte arrive au fil de l'eau (`onDelta`) : la voix peut
+ * commencer la première phrase pendant que Claude écrit la suite.
+ */
+export async function streamClaude(client: Anthropic, ask: ClaudeAsk, onDelta: (text: string) => void): Promise<ClaudeAnswer> {
+  const attempts = attemptsFor(ask);
+  let emitted = false;
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const params: Anthropic.MessageStreamParams = attempts[i];
+      const stream = client.messages.stream(params);
+      stream.on("text", (delta) => {
+        emitted = true;
+        onDelta(delta);
+      });
+      return toAnswer(await stream.finalMessage());
+    } catch (error) {
+      if (emitted || !(error instanceof Anthropic.BadRequestError) || i === attempts.length - 1) throw error;
+      console.warn("Claude (flux) : réglage refusé, nouvel essai sans", error.message.slice(0, 160));
+    }
+  }
+  throw new Error("Claude n'a pas répondu.");
+}
+
+export async function askClaude(client: Anthropic, ask: ClaudeAsk): Promise<ClaudeAnswer> {
+  const attempts = attemptsFor(ask);
   let response: Anthropic.Message | null = null;
   for (let i = 0; i < attempts.length; i++) {
     try {
@@ -68,13 +106,7 @@ export async function askClaude(client: Anthropic, ask: ClaudeAsk): Promise<Clau
     }
   }
   if (!response) throw new Error("Claude n'a pas répondu.");
-  return {
-    text: textOf(response),
-    stopReason: response.stop_reason ?? null,
-    model: response.model,
-    blocks: response.content.map((b) => b.type),
-    truncated: response.stop_reason === "max_tokens",
-  };
+  return toAnswer(response);
 }
 
 export function claudeErrorDetail(error: unknown) {

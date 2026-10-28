@@ -246,6 +246,14 @@ try {
     const data = await res.json();
     if (!res.ok() || !data.text || data.fallback) throw new Error(JSON.stringify(data).slice(0, 200));
   });
+  await step("Réplique éco en flux : morceaux puis « done » avec le texte complet", async () => {
+    const res = await page.request.post(`${BASE}/api/eco/reply`, { data: { personality: "ami", language: "fr", correction: "legere", speed: "normal", topic: "Ta journée", ownTopic: false, kind: "conversation", stream: true, transcript: [{ role: "agent", text: "Salut Cherif !" }, { role: "user", text: "hier j'ai bu mon café" }] } });
+    if (!res.ok() || !/ndjson/.test(res.headers()["content-type"] ?? "")) throw new Error(`HTTP ${res.status()} ${res.headers()["content-type"]}`);
+    const events = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+    const deltas = events.filter((e) => e.type === "delta").length;
+    const done = events.find((e) => e.type === "done");
+    if (deltas < 2 || !done?.text || !/après le café/.test(done.text)) throw new Error(`flux : ${deltas} morceaux, done=${JSON.stringify(done).slice(0, 100)}`);
+  });
   await step("Sujets, bilan et niveau : JSON de Claude bien lu", async () => {
     const sujets = await (await page.request.post(`${BASE}/api/sujets`, { data: { personality: "ami", language: "en", recent: [] } })).json();
     if (!Array.isArray(sujets.topics) || sujets.topics.length < 3) throw new Error(`sujets : ${JSON.stringify(sujets).slice(0, 120)}`);
@@ -290,6 +298,8 @@ try {
     if (!stt.ok() || !sttData.text || sttData.engine !== "groq") throw new Error(`stt groq : ${JSON.stringify(sttData).slice(0, 120)}`);
     const scribe = await (await page.request.post(`${BASE}/api/stt`, { multipart: { language: "fr", engine: "scribe", audio: { name: "a.wav", mimeType: "audio/wav", buffer: wav } } })).json();
     if (scribe.engine !== "scribe" || !scribe.text) throw new Error(`stt scribe : ${JSON.stringify(scribe).slice(0, 120)}`);
+    const pcEar = await (await page.request.post(`${BASE}/api/stt`, { multipart: { language: "fr", engine: "pc", audio: { name: "a.wav", mimeType: "audio/wav", buffer: wav } } })).json();
+    if (pcEar.engine !== "pc" || !pcEar.text) throw new Error(`stt pc : ${JSON.stringify(pcEar).slice(0, 120)}`);
     const ph = await (await page.request.post(`${BASE}/api/phonemes`, { data: { sentences: ["Salut Cherif ! Ça va ?"], language: "fr" } })).json();
     if (!ph.phonemes?.[0] || !/salˈy/.test(ph.phonemes[0])) throw new Error(`phonèmes : ${JSON.stringify(ph).slice(0, 120)}`);
   });

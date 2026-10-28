@@ -144,6 +144,24 @@ const server = http.createServer(async (req, res) => {
     const user = lastUserText(body.messages ?? []);
     if (/LENT/.test(user)) await new Promise((r) => setTimeout(r, 1500)); // Claude lent : l'appui pendant la réflexion doit être refusé proprement
     const text = claudeAnswer(body);
+    if (body.stream) {
+      // Flux SSE comme la vraie API : le texte arrive par petits morceaux.
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      const usage = { input_tokens: 10, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, server_tool_use: null, service_tier: null };
+      const ev = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      ev("message_start", { type: "message_start", message: { id: "msg_mock", type: "message", role: "assistant", model: body.model ?? "mock", content: [], stop_reason: null, stop_sequence: null, usage } });
+      if (text !== null) {
+        ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+        for (const piece of text.match(/[\s\S]{1,14}/g) ?? []) {
+          ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } });
+          await new Promise((r) => setTimeout(r, 12));
+        }
+        ev("content_block_stop", { type: "content_block_stop", index: 0 });
+      }
+      ev("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 10, input_tokens: null, cache_creation_input_tokens: null, cache_read_input_tokens: null, server_tool_use: null } });
+      ev("message_stop", { type: "message_stop" });
+      return res.end();
+    }
     return json(res, 200, {
       id: "msg_mock",
       type: "message",
@@ -158,7 +176,11 @@ const server = http.createServer(async (req, res) => {
 
   // ---- PC de Cherif (Chatterbox)
   if (req.method === "GET" && path === "/pc/health") {
-    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami"], error: null });
+    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami"], stt: "faster-whisper large-v3-turbo (cuda)", error: null });
+  }
+  if (req.method === "POST" && path === "/pc/stt") {
+    if (req.headers.authorization !== "Bearer test") return json(res, 401, { detail: "Mot de passe refusé." });
+    return json(res, 200, { text: "hier j'ai bu mon café", words: [{ text: "hier", start: 0.1, end: 0.4 }, { text: "café", start: 1.3, end: 1.7 }], durationMs: 1600, language: "fr" });
   }
   if (req.method === "POST" && path === "/pc/tts") {
     if (req.headers.authorization !== "Bearer test") return json(res, 401, { detail: "Mot de passe refusé." });
