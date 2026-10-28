@@ -110,6 +110,15 @@ const STUBS = `
       constructor() { this.state = "running"; this.sampleRate = 16000; this.destination = {}; this._timers = []; }
       resume() { return Promise.resolve(); }
       close() { this._timers.forEach((t) => clearInterval(t)); return Promise.resolve(); }
+      get currentTime() { return performance.now() / 1000; }
+      decodeAudioData(buf) { return Promise.resolve({ duration: Math.max(0.05, (buf.byteLength - 44) / 2 / 24000) }); }
+      createBufferSource() {
+        const node = { buffer: null, onended: null, playbackRate: { value: 1 }, connect() {}, stop() {}, start(when) {
+          const delay = Math.max(0, ((when ?? 0) - performance.now() / 1000) * 1000) + (node.buffer?.duration ?? 0.1) * 1000;
+          setTimeout(() => node.onended && node.onended(), delay);
+        } };
+        return node;
+      }
       createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
       createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
       createScriptProcessor(size) {
@@ -514,6 +523,41 @@ try {
     const stats = await mockStats();
     if (!(stats["/openai/v1/audio/transcriptions"] >= 1)) throw new Error(`Groq n'a pas été appelé : ${JSON.stringify(stats)}`);
     await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ V5 : temps réel sur le PC (WebSocket simulé)
+  page = await newPage(browser, { "prof-langue:engine": "live", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Temps réel sur le PC (WebSocket simulé), Max en français");
+  await step("Le téléphone se connecte au PC, Max parle, Cherif parle, Max répond en flux", async () => {
+    await mockStats(true);
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    const header = await page.locator("header").first().textContent();
+    if (!/temps réel/.test(header ?? "")) throw new Error(`en-tête : ${header}`);
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      window.__micLevel = 0.6;
+    });
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => {
+      window.__micLevel = 0;
+    });
+    await waitBubble("hier j'ai bu mon café", 20000);
+    await waitBubble("après le café", 20000);
+    const stats = await mockStats();
+    if (!(stats["/pc/live"] >= 1)) throw new Error(`pas de connexion WebSocket au PC : ${JSON.stringify(stats)}`);
+    await noBlockingError();
+  });
+  await step("Répète relit la dernière réplique (temps réel)", async () => {
+    await page.getByRole("button", { name: /Répète/ }).click();
+    await page.waitForTimeout(600);
+    await noBlockingError();
+  });
+  await step("Terminer la séance temps réel sans erreur", async () => {
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
+    if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));
   });
   await page.context().close();
 

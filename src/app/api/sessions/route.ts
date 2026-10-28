@@ -25,7 +25,7 @@ type Body = {
   level?: string | null;
   /** Niveau observé par le bilan sur cette séance (A1 à C2). */
   observedLevel?: string | null;
-  /** "elevenlabs" (minutes payantes) ou "eco" (téléphone + Claude, gratuit). */
+  /** "elevenlabs" (minutes payantes), "eco" (téléphone + Claude) ou "live" (temps réel sur le PC), ces deux-là gratuits. */
   engine?: string;
 };
 
@@ -98,8 +98,8 @@ export async function POST(request: Request) {
   try {
     const sql = (await db())!;
     const cost = await getCostSettings();
-    const engine = body.engine === "eco" ? "eco" : "elevenlabs";
-    const costFcfa = engine === "eco" ? 0 : Math.round((seconds / 60) * cost.perMinuteFcfa);
+    const engine = body.engine === "eco" || body.engine === "live" ? body.engine : "elevenlabs";
+    const costFcfa = engine === "elevenlabs" ? Math.round((seconds / 60) * cost.perMinuteFcfa) : 0;
     const userTurns = Math.round(Number(body.userTurns ?? 0));
     const observed = typeof body.observedLevel === "string" && /^[ABC][12]$/.test(body.observedLevel) ? body.observedLevel : null;
     const rows = await sql<{ id: number }[]>`insert into sessions

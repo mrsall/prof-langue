@@ -6,6 +6,7 @@
  *   ANTHROPIC_BASE_URL=http://localhost:4545 ELEVENLABS_API_BASE=http://localhost:4545
  */
 import http from "node:http";
+import { WebSocketServer } from "ws";
 
 const PORT = Number(process.env.MOCK_PORT || 4545);
 const log = (...args) => console.log("[mock]", ...args);
@@ -250,6 +251,74 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && path.startsWith("/v1/convai/conversation/")) return json(res, 200, { token: "tok", signed_url: "wss://mock" });
 
   json(res, 404, { error: `mock: ${req.method} ${path} inconnu` });
+});
+
+// ---- PC de Cherif, mode temps réel (WebSocket /pc/live)
+const wss = new WebSocketServer({ noServer: true });
+server.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  if (url.pathname !== "/pc/live") return socket.destroy();
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    count("/pc/live");
+    let loud = 0;
+    let quiet = 0;
+    let responding = false;
+    let turns = 0;
+    const send = (o) => ws.readyState === 1 && ws.send(JSON.stringify(o));
+    const speak = async (text) => {
+      send({ type: "speak", text, seq: 1 });
+      ws.send(silentWav(0.3));
+    };
+    const reply = async (userText) => {
+      responding = true;
+      send({ type: "partial", text: userText.split(" ").slice(0, 2).join(" ") });
+      await new Promise((r) => setTimeout(r, 80));
+      send({ type: "user", text: userText });
+      const answer = "Très bien, Cherif. Et après le café, qu'est-ce que tu as fait ?";
+      for (const piece of answer.match(/[\s\S]{1,12}/g)) {
+        send({ type: "delta", text: piece });
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await speak("Très bien, Cherif.");
+      send({ type: "timing", claudeMs: 420, voiceMs: 310 });
+      await speak("Et après le café, qu'est-ce que tu as fait ?");
+      send({ type: "agent", text: answer });
+      turns += 1;
+      responding = false;
+      loud = 0;
+      quiet = 0;
+    };
+    ws.on("message", (data, isBinary) => {
+      if (!isBinary) {
+        const cmd = JSON.parse(data.toString());
+        log("live ←", cmd.type);
+        if (cmd.type === "start") {
+          if (!/^\d+\.[0-9a-f]{64}$/.test(cmd.ticket ?? "")) return send({ type: "error", message: "Ticket refusé", fatal: true });
+          send({ type: "ready" });
+          void speak(cmd.firstMessage).then(() => send({ type: "agent", text: cmd.firstMessage }));
+        } else if (cmd.type === "repeat") {
+          void speak("Et après le café, qu'est-ce que tu as fait ?");
+        } else if (cmd.type === "flush") {
+          if (loud >= 2 && !responding) void reply("hier j'ai bu mon café");
+        } else if (cmd.type === "end") {
+          ws.close();
+        }
+        return;
+      }
+      // Trames PCM 16 bits : énergie moyenne → « voix » ou « silence ».
+      const pcm = new Int16Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 2));
+      let sum = 0;
+      for (let i = 0; i < pcm.length; i += 4) sum += pcm[i] * pcm[i];
+      const rms = Math.sqrt(sum / Math.max(1, pcm.length / 4));
+      if (rms > 800) {
+        loud += 1;
+        quiet = 0;
+      } else if (loud > 0) {
+        quiet += 1;
+        if (loud >= 3 && quiet >= 4 && !responding) void reply("hier j'ai bu mon café");
+      }
+    });
+  });
 });
 
 server.listen(PORT, () => log(`prêt sur http://localhost:${PORT}`));

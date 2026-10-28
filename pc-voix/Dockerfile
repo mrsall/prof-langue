@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 lib
 
 WORKDIR /app
 # 1) La version publiée (connue pour s'installer sans surprise) et toutes ses dépendances.
-RUN pip install --upgrade pip && pip install "chatterbox-tts==0.1.7" fastapi "uvicorn[standard]" soundfile python-multipart faster-whisper
+RUN pip install --upgrade pip && pip install "chatterbox-tts==0.1.7" fastapi "uvicorn[standard]" soundfile python-multipart faster-whisper anthropic silero-vad
 # 2) Le code plus récent du dépôt officiel (modèle multilingue v3, meilleur en français) par-dessus,
 #    sans toucher aux dépendances. Si ça ne s'importe pas, on revient à la version publiée :
 #    la construction n'échoue jamais pour ça.

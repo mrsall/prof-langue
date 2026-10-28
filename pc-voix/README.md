@@ -63,6 +63,20 @@ Le même conteneur fait tourner Whisper (modèle `large-v3-turbo`) sur ta carte 
 - Le plus efficace : remplacer les voix de référence fournies (voix de synthèse Piper, un peu plates) par un **enregistrement humain** de 10 à 15 s (voir `voix/README.md`).
 - Deux réglages dans `docker-compose.yml`, puis `docker compose up -d` : `CHATTERBOX_EXAGGERATION` (0,3 = plat, 0,6 = conversation, 0,7 = très expressif) et `CHATTERBOX_CFG` (0,5 = colle au rythme de la référence, 0,3 = débit plus libre et plus vivant).
 
+## 8. V5 : mode « Temps réel (mon PC) »
+
+Le téléphone parle directement à ton PC (WebSocket à travers Tailscale) : le PC écoute en continu, détecte tout seul la fin de ta phrase, transcrit avec Whisper, fait répondre Claude en flux et renvoie la voix phrase par phrase, sans trou. Si tu parles pendant que le personnage parle, il se tait. Objectif : 1,5 à 2 s entre ta phrase et la réponse, gratuit, illimité.
+
+1. Dans `pc-voix/.env`, ajoute ta clé Anthropic (la même que dans Vercel) :
+   ```
+   ANTHROPIC_API_KEY=sk-ant-…
+   ```
+2. Reconstruis : `docker compose up -d --build`. Les journaux doivent montrer « VAD Silero chargé » et « Whisper chargé ».
+3. Sur l'accueil de l'app, le choix « Temps réel (mon PC) » apparaît à côté de « ElevenLabs » et « Mode éco » dès que `PC_TTS_URL` et `PC_TTS_TOKEN` sont dans Vercel. Choisis-le et lance une séance.
+4. Pendant la séance : mains libres conseillées. Pour couper le personnage, parle simplement (ou appuie sur le micro). « Répète » relit la dernière phrase. La vitesse de lecture n'est pas réglable dans ce mode.
+
+Le PC ne reçoit que du son et du texte de séance ; rien n'est enregistré sur disque (les fichiers temporaires de transcription sont effacés aussitôt). Le mot de passe du PC ne quitte jamais Vercel : l'app donne au téléphone un ticket signé, valable 3 heures, que le PC vérifie.
+
 ## Mettre à jour le serveur
 
 Quand le dépôt change : retélécharge le ZIP, remplace le contenu du dossier `pc-voix` **en gardant ton fichier `.env` et ton dossier `voix`**, puis dans PowerShell, dans `pc-voix` :
