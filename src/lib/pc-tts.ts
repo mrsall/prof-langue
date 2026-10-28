@@ -25,7 +25,7 @@ export function pcHost() {
   }
 }
 
-export type PcHealth = { ok: boolean; warm?: boolean; model?: string | null; device?: string; gpu?: string | null; voices?: string[]; error?: string | null };
+export type PcHealth = { ok: boolean; warm?: boolean; model?: string | null; device?: string; gpu?: string | null; voices?: string[]; stt?: string | null; error?: string | null };
 
 export async function pcHealth(timeoutMs = 6000): Promise<PcHealth> {
   const controller = new AbortController();
@@ -39,6 +39,34 @@ export async function pcHealth(timeoutMs = 6000): Promise<PcHealth> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Transcription par Whisper sur le PC (même serveur que la voix). */
+export async function pcTranscribe(audio: Blob, language: Language): Promise<{ text: string; words: { text: string; start: number; end: number }[]; durationMs: number | null }> {
+  if (!pcAvailable()) throw new Error("Oreille du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
+  const form = new FormData();
+  form.append("audio", audio, "parole.wav");
+  form.append("language", language);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let res: Response;
+  try {
+    res = await fetch(`${pcBaseUrl()}/stt`, { method: "POST", headers: { Authorization: `Bearer ${process.env.PC_TTS_TOKEN!.trim()}` }, body: form, signal: controller.signal });
+  } catch (error) {
+    throw new Error(error instanceof Error && error.name === "AbortError" ? "Le PC met trop de temps à transcrire." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 200);
+    throw new Error(res.status === 401 ? "Le PC refuse le mot de passe (PC_TTS_TOKEN)." : `Le PC a répondu ${res.status}${detail ? ` : ${detail}` : ""}`);
+  }
+  const data = (await res.json()) as { text?: string; words?: { text?: string; start?: number; end?: number }[]; durationMs?: number | null };
+  return {
+    text: (data.text ?? "").trim(),
+    words: (data.words ?? []).filter((w) => typeof w.text === "string").map((w) => ({ text: w.text as string, start: Number(w.start ?? 0), end: Number(w.end ?? 0) })),
+    durationMs: typeof data.durationMs === "number" ? data.durationMs : null,
+  };
 }
 
 export async function pcSpeak(options: { text: string; language: Language; voice: string }): Promise<{ wav: Buffer; generationMs: number | null }> {

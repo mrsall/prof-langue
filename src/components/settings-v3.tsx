@@ -149,13 +149,13 @@ export function SettingsV3() {
   };
 
   const [gemini, setGemini] = useState<{ ok: boolean; model: string | null; ms: number; error: string | null } | null>(null);
-  const [pc, setPc] = useState<{ ok: boolean; gpu: string | null; model: string | null; voices: string[]; ms: number; generationMs: number | null; error: string | null } | null>(null);
+  const [pc, setPc] = useState<{ ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; ms: number; generationMs: number | null; error: string | null } | null>(null);
   const [pcBusy, setPcBusy] = useState(false);
   const testPc = async () => {
     setPcBusy(true);
     try {
       const res = await fetch("/api/diagnostic/pc");
-      const data = (await res.json()) as { ok: boolean; gpu: string | null; model: string | null; voices: string[]; ms: number; generationMs: number | null; error: string | null };
+      const data = (await res.json()) as { ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; ms: number; generationMs: number | null; error: string | null };
       setPc(data);
       if (data.ok) {
         const audio = new Audio(`/api/tts?engine=pc&lang=fr&personality=prof&text=${encodeURIComponent("Bonjour Cherif, je suis la voix de ton PC. On commence quand tu veux.")}`);
@@ -289,14 +289,14 @@ export function SettingsV3() {
         {state.pc.configured ? (
           <>
             <p className="text-sm text-muted">
-              Chatterbox sur ta carte NVIDIA, joint sur <span className="font-mono text-xs">{state.pc.host}</span>. Choisis « Mon PC » comme voix du mode éco sur l&apos;accueil. PC éteint : ElevenLabs prend le relais tout seul.
+              Chatterbox (voix) et Whisper (oreille) sur ta carte NVIDIA, joints sur <span className="font-mono text-xs">{state.pc.host}</span>. Sur l&apos;accueil, choisis « Mon PC » comme voix et comme oreille du mode éco. PC éteint : ElevenLabs et Groq prennent le relais tout seuls.
             </p>
             <button type="button" disabled={pcBusy} onClick={testPc} className="h-11 rounded-xl border border-line bg-bg text-sm font-bold disabled:opacity-60">
               {pcBusy ? "Test en cours…" : "Tester la voix de mon PC (elle parle)"}
             </button>
             {pc && (
               <p className={`rounded-xl bg-bg px-3 py-2 font-mono text-xs ${pc.ok ? "text-muted" : "text-danger"}`}>
-                {pc.ok ? `${pc.gpu ?? "GPU ?"} · ${pc.model ?? "modèle ?"} · ${pc.generationMs ?? "?"} ms de synthèse, ${pc.ms} ms au total${pc.voices.length ? ` · voix : ${pc.voices.join(", ")}` : " · voix par défaut"}` : pc.error}
+                {pc.ok ? `${pc.gpu ?? "GPU ?"} · ${pc.model ?? "modèle ?"} · ${pc.generationMs ?? "?"} ms de synthèse, ${pc.ms} ms au total${pc.voices.length ? ` · ${pc.voices.length} voix` : " · voix par défaut"}${pc.stt ? ` · oreille : ${pc.stt}` : " · oreille Whisper absente"}` : pc.error}
               </p>
             )}
           </>

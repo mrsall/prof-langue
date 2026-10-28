@@ -177,6 +177,8 @@ function AppInner() {
   const [ecoStatus, setEcoStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [ecoMode, setEcoMode] = useState<EcoMode>("idle");
   const [interim, setInterim] = useState("");
+  // Réplique du personnage en train de s'écrire (mode éco, flux).
+  const [agentDraft, setAgentDraft] = useState<string | null>(null);
   // Temps de la dernière réplique en mode éco (pour repérer ce qui traîne : Claude ou la voix).
   const [timing, setTiming] = useState<EcoTiming | null>(null);
   // Avertissement passager (la séance continue), effacé tout seul.
@@ -477,6 +479,7 @@ function AppInner() {
                 setEcoStatus("disconnected");
                 setEcoMode("idle");
                 setInterim("");
+                setAgentDraft(null);
                 setHolding(false);
                 if (agentSpeakStart.current != null) {
                   agentTalkMs.current += performance.now() - agentSpeakStart.current;
@@ -510,6 +513,7 @@ function AppInner() {
               },
               onInterim: (text) => setInterim(text),
               onTiming: setTiming,
+              onDraft: setAgentDraft,
             },
           });
           ecoRef.current = eng;
@@ -1035,7 +1039,7 @@ function AppInner() {
           aria-label="Texte de la conversation"
           className="flex max-h-64 min-h-24 flex-col gap-2 overflow-y-auto rounded-2xl border border-line bg-elevated p-3"
         >
-          {transcript.length === 0 ? (
+          {transcript.length === 0 && !agentDraft ? (
             <p className="text-center text-sm text-muted">Le texte de la conversation s&apos;affichera ici.</p>
           ) : (
             transcript.map((line) => (
@@ -1046,6 +1050,11 @@ function AppInner() {
                 {line.text}
               </p>
             ))
+          )}
+          {agentDraft && (
+            <p aria-live="polite" className="max-w-[85%] self-start rounded-2xl bg-accent-soft px-3 py-2 text-sm opacity-70">
+              {agentDraft}
+            </p>
           )}
         </section>
       )}
@@ -1401,7 +1410,7 @@ function HomeScreen({
                   ))}
                 </div>
                 <p className="px-1 text-xs text-muted">{VOICE_CHOICES.find((v) => v.key === voiceChoice)?.hint}</p>
-                <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Oreille du mode éco">
+                <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Oreille du mode éco">
                   {EAR_CHOICES.map((e) => (
                     <button
                       key={e.key}

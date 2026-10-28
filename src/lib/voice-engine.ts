@@ -29,10 +29,20 @@ export function parseVoiceChoice(raw: string | null | undefined): VoiceChoice {
   return raw === "kokoro" || raw === "phone" || raw === "gemini" || raw === "pc" ? raw : "eleven";
 }
 
+/** Un morceau de voix dont la fabrication a déjà commencé ; `play` le joue quand c'est son tour. */
+export type PreparedClip = {
+  text: string;
+  play: (onStart?: () => void) => SpeakHandle;
+  /** À appeler si on ne le jouera finalement pas (libère les fichiers audio). */
+  dispose: () => void;
+};
+
 export type Speaker = {
   choice: VoiceChoice;
   /** Prépare ce qu'il faut (modèle Kokoro) ; peut être long la première fois. */
   preload: (onProgress?: (p: KokoroProgress) => void) => Promise<void>;
+  /** Lance la fabrication d'un texte sans le jouer : la phrase suivante se prépare pendant que la précédente se joue. */
+  prepare: (text: string, rate: number) => PreparedClip;
   /** `onStart` est appelé quand le son commence vraiment (après la fabrication de la voix). */
   speak: (text: string, rate: number, onStart?: () => void) => SpeakHandle;
 };
@@ -162,7 +172,7 @@ export function chunkForTts(text: string, max = 260): string[] {
   const out: string[] = [];
   let current = "";
   for (const sentence of splitSentences(text)) {
-    if (current && current.length + sentence.length + 1 > max) {
+    if (current && (max <= 1 || current.length + sentence.length + 1 > max)) {
       out.push(current);
       current = sentence;
     } else {
@@ -176,139 +186,161 @@ export function chunkForTts(text: string, max = 260): string[] {
 // ---- haut-parleurs ----
 
 function phoneSpeaker(language: Language): Speaker {
-  return {
-    choice: "phone",
-    preload: async () => {
-      if (!speechSynthesisAvailable()) throw new Error("Ce téléphone n'a pas de voix de synthèse.");
-    },
-    speak: (text, rate, onStart) => {
+  const prepare = (text: string, rate: number): PreparedClip => ({
+    text,
+    play: (onStart) => {
       const handle = speakText(text, { language, rate: clampRate(rate, 0.5, 1.5) });
       // Voix locale : elle démarre tout de suite (et certains téléphones n'annoncent pas le début).
       onStart?.();
       return handle;
     },
+    dispose: () => undefined,
+  });
+  return {
+    choice: "phone",
+    preload: async () => {
+      if (!speechSynthesisAvailable()) throw new Error("Ce téléphone n'a pas de voix de synthèse.");
+    },
+    prepare,
+    speak: (text, rate, onStart) => prepare(text, rate).play(onStart),
   };
 }
 
 /** Voix fabriquée par le serveur (/api/tts) : ElevenLabs, ou Google / le PC de Cherif avec repli ElevenLabs. */
 function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, personalityId: string | null): Speaker {
   const fallback = speechSynthesisAvailable() ? phoneSpeaker(language) : null;
-  return {
-    choice: engine,
-    preload: async () => undefined,
-    speak: (text, rate, onStart) => {
-      // Une réplique longue part en plusieurs morceaux (le serveur coupe au-delà de 600 caractères).
-      const segments = splitVoiceSegments(text).flatMap((seg) => chunkForTts(seg.text).map((part) => ({ text: part, alt: seg.alt })));
-      let cancelled = false;
-      let inner: SpeakHandle | null = null;
-      const fetchPart = async (seg: { text: string; alt?: boolean }) => {
-        const q = new URLSearchParams({
-          text: seg.text,
-          lang: language,
-          speed: String(clampRate(rate, 0.7, 1.2)),
-          personality: personalityId ?? "",
-          role: seg.alt ? "judge" : "main",
-          engine,
-        });
-        let res = await fetch(`/api/tts?${q.toString()}`);
-        if (!res.ok && engine !== "eleven") {
-          // Voix Google ou PC indisponible (clé absente, quota, PC éteint) : ElevenLabs lit cette réplique.
-          console.warn(engine === "pc" ? "Voix du PC indisponible, repli ElevenLabs" : "Voix Google indisponible, repli ElevenLabs");
-          q.set("engine", "eleven");
-          res = await fetch(`/api/tts?${q.toString()}`);
-        }
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(data.error ?? `Voix indisponible (${res.status}).`);
-        }
-        return URL.createObjectURL(await res.blob());
-      };
-      const done = (async () => {
-        // Tous les morceaux se fabriquent en même temps ; le premier se joue dès qu'il est prêt.
-        const jobs = segments.map((seg) => fetchPart(seg).then((url) => ({ url }), (error: unknown) => ({ error })));
-        const dropRest = (from: number) => jobs.slice(from).forEach((j) => void j.then((r) => "url" in r && URL.revokeObjectURL(r.url)));
-        // ElevenLabs applique déjà la vitesse ; Google et le PC sont lus à vitesse réglée par le lecteur (hauteur conservée).
-        const playbackRate = engine === "eleven" ? 1 : clampRate(rate, 0.7, 1.2);
-        for (let i = 0; i < jobs.length; i++) {
-          const result = await jobs[i];
-          if (cancelled) return dropRest(i);
-          if ("error" in result) {
-            // ElevenLabs injoignable : la voix du téléphone prend le relais pour ce qui reste à dire.
-            console.warn("Voix ElevenLabs indisponible, repli sur la voix du téléphone :", result.error instanceof Error ? result.error.message : result.error);
-            dropRest(i + 1);
-            if (!fallback) throw result.error;
-            inner = fallback.speak(
-              segments
-                .slice(i)
-                .map((s) => s.text)
-                .join(" "),
-              rate,
-              onStart,
-            );
-            await inner.done;
-            return;
-          }
-          inner = playUrls([result.url], playbackRate, onStart);
-          try {
-            await inner.done;
-          } finally {
-            URL.revokeObjectURL(result.url);
-          }
-        }
-      })();
-      return {
-        cancel: () => {
-          cancelled = true;
-          inner?.cancel();
-        },
-        done,
-      };
-    },
+  const fetchPart = async (seg: { text: string; alt?: boolean }, rate: number) => {
+    const q = new URLSearchParams({
+      text: seg.text,
+      lang: language,
+      speed: String(clampRate(rate, 0.7, 1.2)),
+      personality: personalityId ?? "",
+      role: seg.alt ? "judge" : "main",
+      engine,
+    });
+    let res = await fetch(`/api/tts?${q.toString()}`);
+    if (!res.ok && engine !== "eleven") {
+      // Voix Google ou PC indisponible (clé absente, quota, PC éteint) : ElevenLabs lit cette réplique.
+      console.warn(engine === "pc" ? "Voix du PC indisponible, repli ElevenLabs" : "Voix Google indisponible, repli ElevenLabs");
+      q.set("engine", "eleven");
+      res = await fetch(`/api/tts?${q.toString()}`);
+    }
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(data.error ?? `Voix indisponible (${res.status}).`);
+    }
+    return URL.createObjectURL(await res.blob());
   };
+  const prepare = (text: string, rate: number): PreparedClip => {
+    // Une réplique longue part en plusieurs morceaux (le serveur coupe au-delà de 600 caractères) ;
+    // le premier morceau est une seule phrase pour que le son démarre au plus vite.
+    const segments = splitVoiceSegments(text).flatMap((seg, i) => chunkForTts(seg.text, i === 0 ? 1 : 260).map((part) => ({ text: part, alt: seg.alt })));
+    // Tous les morceaux se fabriquent en même temps, dès maintenant.
+    const jobs = segments.map((seg) => fetchPart(seg, rate).then((url) => ({ url }), (error: unknown) => ({ error })));
+    const dropFrom = (from: number) => jobs.slice(from).forEach((j) => void j.then((r) => "url" in r && URL.revokeObjectURL(r.url)));
+    let played = false;
+    return {
+      text,
+      dispose: () => {
+        if (!played) dropFrom(0);
+      },
+      play: (onStart) => {
+        played = true;
+        let cancelled = false;
+        let inner: SpeakHandle | null = null;
+        const done = (async () => {
+          // ElevenLabs applique déjà la vitesse ; Google et le PC sont lus à vitesse réglée par le lecteur (hauteur conservée).
+          const playbackRate = engine === "eleven" ? 1 : clampRate(rate, 0.7, 1.2);
+          for (let i = 0; i < jobs.length; i++) {
+            const result = await jobs[i];
+            if (cancelled) return dropFrom(i);
+            if ("error" in result) {
+              // ElevenLabs injoignable : la voix du téléphone prend le relais pour ce qui reste à dire.
+              console.warn("Voix ElevenLabs indisponible, repli sur la voix du téléphone :", result.error instanceof Error ? result.error.message : result.error);
+              dropFrom(i + 1);
+              if (!fallback) throw result.error;
+              inner = fallback.speak(
+                segments
+                  .slice(i)
+                  .map((s) => s.text)
+                  .join(" "),
+                rate,
+                onStart,
+              );
+              await inner.done;
+              return;
+            }
+            inner = playUrls([result.url], playbackRate, onStart);
+            try {
+              await inner.done;
+            } finally {
+              URL.revokeObjectURL(result.url);
+            }
+          }
+        })();
+        return {
+          cancel: () => {
+            cancelled = true;
+            inner?.cancel();
+          },
+          done,
+        };
+      },
+    };
+  };
+  return { choice: engine, preload: async () => undefined, prepare, speak: (text, rate, onStart) => prepare(text, rate).play(onStart) };
 }
 
 function kokoroSpeaker(personalityId: string | null): Speaker {
   const language: Language = "en";
+  const prepare = (text: string, rate: number): PreparedClip => {
+    const segments = splitVoiceSegments(text);
+    const jobs: { voice: string; sentence: string }[] = [];
+    for (const seg of segments) {
+      const voice = kokoroVoiceFor(personalityId, seg.alt ? "judge" : "main");
+      for (const sentence of splitSentences(seg.text)) jobs.push({ voice, sentence });
+    }
+    const speed = clampRate(rate, 0.6, 1.4);
+    // La première phrase se fabrique dès maintenant ; les suivantes pendant que la précédente se joue.
+    let next = jobs.length > 0 ? synthesize(jobs[0].sentence, { language, voice: jobs[0].voice, speed }).catch(() => null) : null;
+    return {
+      text,
+      dispose: () => undefined,
+      play: (onStart) => {
+        let cancelled = false;
+        let inner: SpeakHandle | null = null;
+        const done = (async () => {
+          for (let i = 0; i < jobs.length; i++) {
+            const result = await next;
+            if (!result || cancelled) return;
+            next = i + 1 < jobs.length ? synthesize(jobs[i + 1].sentence, { language, voice: jobs[i + 1].voice, speed }).catch(() => null) : null;
+            const url = URL.createObjectURL(result.blob);
+            inner = playUrls([url], 1, onStart);
+            try {
+              await inner.done;
+            } finally {
+              URL.revokeObjectURL(url);
+            }
+            if (cancelled) return;
+          }
+        })();
+        return {
+          cancel: () => {
+            cancelled = true;
+            inner?.cancel();
+          },
+          done,
+        };
+      },
+    };
+  };
   return {
     choice: "kokoro",
     preload: async (onProgress) => {
       await loadKokoro({ onProgress });
     },
-    speak: (text, rate, onStart) => {
-      const segments = splitVoiceSegments(text);
-      let cancelled = false;
-      let inner: SpeakHandle | null = null;
-      const done = (async () => {
-        // Phrase par phrase : la suivante se fabrique pendant que la précédente se joue.
-        const jobs: { voice: string; sentence: string }[] = [];
-        for (const seg of segments) {
-          const voice = kokoroVoiceFor(personalityId, seg.alt ? "judge" : "main");
-          for (const sentence of splitSentences(seg.text)) jobs.push({ voice, sentence });
-        }
-        const speed = clampRate(rate, 0.6, 1.4);
-        let next = jobs.length > 0 ? synthesize(jobs[0].sentence, { language, voice: jobs[0].voice, speed }) : null;
-        for (let i = 0; i < jobs.length; i++) {
-          const result = await next;
-          if (!result || cancelled) return;
-          next = i + 1 < jobs.length ? synthesize(jobs[i + 1].sentence, { language, voice: jobs[i + 1].voice, speed }) : null;
-          const url = URL.createObjectURL(result.blob);
-          inner = playUrls([url], 1, onStart);
-          try {
-            await inner.done;
-          } finally {
-            URL.revokeObjectURL(url);
-          }
-          if (cancelled) return;
-        }
-      })();
-      return {
-        cancel: () => {
-          cancelled = true;
-          inner?.cancel();
-        },
-        done,
-      };
-    },
+    prepare,
+    speak: (text, rate, onStart) => prepare(text, rate).play(onStart),
   };
 }
 

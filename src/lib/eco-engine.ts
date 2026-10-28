@@ -4,7 +4,7 @@ import type { Language } from "@/config/personalities";
 import type { TranscriptLine } from "@/lib/prompt";
 import { startWavRecorder, type WavRecorder } from "@/lib/recorder";
 import { LOCALES, recognizeOnce, speechRecognitionAvailable, type RecognizeHandle, type SpeakHandle } from "@/lib/speech";
-import type { Speaker } from "@/lib/voice-engine";
+import type { PreparedClip, Speaker } from "@/lib/voice-engine";
 import type { EarChoice } from "@/lib/ear";
 
 /**
@@ -27,7 +27,41 @@ export type EcoCallbacks = {
   onInterim?: (text: string) => void;
   /** Temps de la dernière réplique : réponse de Claude, puis fabrication de la voix jusqu'au premier son. */
   onTiming?: (timing: EcoTiming) => void;
+  /** Réplique du personnage en train de s'écrire (flux), `null` quand elle est terminée. */
+  onDraft?: (text: string | null) => void;
 };
+
+/**
+ * Découpe un texte qui arrive par morceaux en phrases complètes, sans jamais
+ * couper à l'intérieur d'une balise <voice> (le juge) ni sur une abréviation.
+ */
+export class SentenceBuffer {
+  private pending = "";
+
+  push(delta: string): string[] {
+    this.pending += delta;
+    const out: string[] = [];
+    const re = /[.!?…]+["»”)]?\s+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(this.pending)) !== null) {
+      const end = m.index + m[0].length;
+      const candidate = this.pending.slice(0, end);
+      const open = candidate.lastIndexOf("<voice");
+      if (open !== -1 && open > candidate.lastIndexOf("</voice>")) break; // balise ouverte : on attend sa fermeture
+      if (candidate.trim().length < 15 || /\b(M|Mme|Mlle|Dr|St|etc|ex|cf|p)\.\s*$/i.test(candidate.trimEnd())) continue;
+      out.push(candidate.trim());
+      this.pending = this.pending.slice(end);
+      re.lastIndex = 0;
+    }
+    return out;
+  }
+
+  flush(): string | null {
+    const rest = this.pending.trim();
+    this.pending = "";
+    return rest || null;
+  }
+}
 
 export type EcoTiming = { claudeMs: number; voiceMs: number };
 
@@ -55,6 +89,8 @@ const RETRY_LINES: Record<Language, string> = {
 };
 
 const SILENCE_MS = 1300;
+/** Mains libres : fin de phrase après ce silence (1,8 s coupait trop tard ; en dessous de 1,2 s, on coupe quelqu'un qui cherche un mot). */
+const END_SILENCE_MS = 1300;
 const MAX_UTTERANCE_MS = 45000;
 /** Au-delà, on considère que Claude ne répondra pas et le personnage relance. */
 const REPLY_TIMEOUT_MS = 25000;
@@ -192,11 +228,16 @@ export class EcoEngine {
     this.options.callbacks.onModeChange({ mode });
   }
 
-  /** Coupe la voix en cours ; la suite de `say()` qui l'attendait ne fera plus rien. */
+  /** Coupe la voix en cours ; la suite de `say()` ou `respond()` qui l'attendait ne fera plus rien. */
   private stopSpeaking() {
     this.speaking?.cancel();
     this.speaking = null;
+    this.turn?.abort();
+    this.turn = null;
   }
+
+  /** Réplique en cours de fabrication phrase par phrase (flux). */
+  private turn: { abort: () => void } | null = null;
 
   /** Mains libres : on se remet à écouter après un court silence, sauf si autre chose a pris la main entre-temps. */
   private relistenSoon() {
@@ -289,12 +330,192 @@ export class EcoEngine {
     }
     this.history.push({ role: "user", text: clean });
     this.options.callbacks.onMessage({ role: "user", message: clean });
-    const reply = await this.ask(this.history);
-    if (reply === null || this.ended) {
-      if (!this.ended && this.handsFree && !this.muted) this.setMode("idle");
+    await this.respond(this.history);
+  }
+
+  /**
+   * Réponse en flux : Claude écrit, et dès qu'une phrase est complète sa voix se
+   * fabrique ; la suivante se prépare pendant que la précédente se joue. Le son
+   * démarre donc après la première phrase, pas après toute la réponse.
+   */
+  private async respond(history: TranscriptLine[]) {
+    if (this.ended) return;
+    this.cancelListening();
+    this.stopSpeaking();
+    this.setMode("thinking");
+    const startedAt = performance.now();
+    this.claudeMs = 0;
+    const cb = this.options.callbacks;
+    const controller = new AbortController();
+    let watchdog = setTimeout(() => controller.abort(), REPLY_TIMEOUT_MS);
+    const touch = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => controller.abort(), REPLY_TIMEOUT_MS);
+    };
+
+    // File des phrases prêtes à jouer, consommée par le lecteur.
+    const queue: PreparedClip[] = [];
+    let producerDone = false;
+    const waker: { fn: (() => void) | null } = { fn: null };
+    let aborted = false;
+    let spoken = "";
+    let full = "";
+    let firstSentenceAt: number | null = null;
+    const turn = {
+      abort: () => {
+        aborted = true;
+        controller.abort();
+        queue.splice(0).forEach((c) => c.dispose());
+        waker.fn?.();
+        // Coupé par Cherif : on garde dans le texte ce qui a été dit.
+        const said = spoken.trim();
+        cb.onDraft?.(null);
+        if (said) {
+          this.lastAgentText = said;
+          this.history.push({ role: "agent", text: said });
+          cb.onMessage({ role: "agent", message: said.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
+        }
+      },
+    };
+    this.turn = turn;
+    const pushSentence = (sentence: string) => {
+      if (aborted) return;
+      if (firstSentenceAt === null) {
+        firstSentenceAt = performance.now();
+        this.claudeMs = Math.round(firstSentenceAt - startedAt);
+      }
+      queue.push(this.options.speaker.prepare(sentence, this.rate));
+      waker.fn?.();
+    };
+    const finish = (text: string) => {
+      if (this.turn !== turn) return;
+      this.turn = null;
+      cb.onDraft?.(null);
+      const clean = text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim();
+      if (clean) {
+        this.lastAgentText = text;
+        this.history.push({ role: "agent", text });
+        cb.onMessage({ role: "agent", message: clean });
+      }
+    };
+
+    const player = (async () => {
+      while (!aborted && !this.ended) {
+        const clip = queue.shift();
+        if (!clip) {
+          if (producerDone) break;
+          await new Promise<void>((r) => (waker.fn = r));
+          waker.fn = null;
+          continue;
+        }
+        let handle: SpeakHandle | null = null;
+        const started = () => {
+          if (!handle || this.speaking !== handle || this.ended) return;
+          if (this.mode !== "speaking") {
+            cb.onTiming?.({ claudeMs: this.claudeMs, voiceMs: Math.round(performance.now() - (firstSentenceAt ?? startedAt)) });
+            this.setMode("speaking");
+          }
+        };
+        handle = clip.play(started);
+        this.speaking = handle;
+        try {
+          await handle.done;
+        } catch (error) {
+          if (this.speaking === handle && !this.ended && !aborted) cb.onError(error instanceof Error ? error.message : "Lecture impossible.", { fatal: false });
+        }
+        if (this.speaking !== handle || this.ended) return; // coupé par Cherif
+        spoken += `${clip.text} `;
+        this.speaking = null;
+      }
+    })();
+
+    const buffer = new SentenceBuffer();
+    let error: string | null = null;
+    let fatal = false;
+    try {
+      const res = await fetch("/api/eco/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...this.options.body, transcript: history.slice(-40), stream: true }),
+        signal: controller.signal,
+      });
+      touch();
+      if (!res.ok || !res.body || !(res.headers.get("content-type") ?? "").includes("ndjson")) {
+        const data = (await res.json().catch(() => ({}))) as { text?: string | null; error?: string };
+        if (res.ok && data.text) {
+          for (const s of buffer.push(`${data.text} `)) pushSentence(s);
+          full = data.text;
+        } else {
+          error = data.error ?? "Le personnage n'a pas pu répondre.";
+          fatal = res.status === 503 || res.status === 401 || res.status === 400;
+        }
+      } else {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let partial = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          touch();
+          partial += decoder.decode(value, { stream: true });
+          const lines = partial.split("\n");
+          partial = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line) as { type: string; text?: string; message?: string; fatal?: boolean; fallback?: boolean; reason?: string };
+            if (event.type === "delta" && event.text) {
+              full += event.text;
+              cb.onDraft?.(full.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim());
+              for (const s of buffer.push(event.text)) pushSentence(s);
+            } else if (event.type === "done") {
+              if (event.text) full = event.text;
+              if (event.fallback) cb.onError(`Claude a eu un raté (${event.reason ?? "?"}). Réglages → Tester Claude pour voir le détail.`, { fatal: false });
+            } else if (event.type === "error") {
+              error = event.message ?? "Le personnage n'a pas pu répondre.";
+              fatal = Boolean(event.fatal);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (!aborted) {
+        const timedOut = err instanceof DOMException && err.name === "AbortError";
+        error = timedOut ? "Claude met trop de temps à répondre ; le personnage relance." : "Pas de connexion. Vérifie ton réseau.";
+      }
+    } finally {
+      clearTimeout(watchdog);
+    }
+    if (aborted || this.ended) return;
+    if (error && !full.trim()) {
+      cb.onError(error, { fatal });
+      producerDone = true;
+      waker.fn?.();
+      await player;
+      finish("");
+      if (fatal) {
+        this.setMode("idle");
+        return;
+      }
+      await this.say(RETRY_LINES[this.options.language]);
       return;
     }
-    await this.say(reply);
+    const rest = buffer.flush();
+    if (rest) pushSentence(rest);
+    producerDone = true;
+    waker.fn?.();
+    await player;
+    if (aborted || this.ended) return;
+    if (this.turn !== turn) {
+      // Coupé pendant la lecture : on garde ce qui a été dit.
+      return;
+    }
+    finish(full.trim() || spoken.trim());
+    this.setMode("idle");
+    if (this.handsFree && !this.muted) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (this.ended || this.mode !== "idle" || this.speaking) return;
+      void this.listen();
+    }
   }
 
   private cancelListening() {
@@ -322,7 +543,7 @@ export class EcoEngine {
     const lang = LOCALES[this.options.language];
     if (this.phoneEar) {
       // Mains libres : fin de phrase après 1,8 s de silence ; appui pour parler : jusqu'au relâchement.
-      const handle = recognizeOnce({ lang, onInterim: this.options.callbacks.onInterim, maxMs: manual ? 90000 : MAX_UTTERANCE_MS, endSilenceMs: manual ? null : 1800 });
+      const handle = recognizeOnce({ lang, onInterim: this.options.callbacks.onInterim, maxMs: manual ? 90000 : MAX_UTTERANCE_MS, endSilenceMs: manual ? null : END_SILENCE_MS });
       this.recognizing = handle;
       const outcome = await handle.done;
       if (token !== this.listenToken || this.ended) return;

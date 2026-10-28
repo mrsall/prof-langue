@@ -11,6 +11,11 @@ services:
     env_file: .env
     environment:
       - CHATTERBOX_T3=v3
+      # Naturel de la voix : expressivité (0,3 plat … 0,7 très expressif) et liberté de rythme (0,5 fidèle … 0,3 libre).
+      - CHATTERBOX_EXAGGERATION=0.6
+      - CHATTERBOX_CFG=0.4
+      # Oreille : modèle Whisper (large-v3-turbo : rapide et précis sur une 4070 ; "medium" si la mémoire manque).
+      - WHISPER_MODEL=large-v3-turbo
     volumes:
       - ./voix:/voix:ro
       - modeles:/cache

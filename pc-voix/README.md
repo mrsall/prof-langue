@@ -54,6 +54,15 @@ Puis Deployments → Redeploy. Dans l'app : Réglages → carte « Voix de mon P
 
 Chatterbox copie l'accent de la voix de référence ; sa voix intégrée est anglophone. Le dossier `voix` contient déjà une voix de départ par personnage, en français et en anglais (origine et licences dans `voix/CREDITS.md`). Pour en changer, remplace le fichier par un enregistrement à toi (voir `voix/README.md`). Pas besoin de redémarrer.
 
+## 6. L'oreille aussi sur le PC
+
+Le même conteneur fait tourner Whisper (modèle `large-v3-turbo`) sur ta carte graphique : sur l'accueil, choisis « Mon PC » comme **oreille** du mode éco. `http://localhost:8765/health` indique `stt` quand il est chargé. PC éteint : Groq ou Scribe prennent le relais.
+
+## 7. Rendre la voix plus naturelle
+
+- Le plus efficace : remplacer les voix de référence fournies (voix de synthèse Piper, un peu plates) par un **enregistrement humain** de 10 à 15 s (voir `voix/README.md`).
+- Deux réglages dans `docker-compose.yml`, puis `docker compose up -d` : `CHATTERBOX_EXAGGERATION` (0,3 = plat, 0,6 = conversation, 0,7 = très expressif) et `CHATTERBOX_CFG` (0,5 = colle au rythme de la référence, 0,3 = débit plus libre et plus vivant).
+
 ## Mettre à jour le serveur
 
 Quand le dépôt change : retélécharge le ZIP, remplace le contenu du dossier `pc-voix` **en gardant ton fichier `.env` et ton dossier `voix`**, puis dans PowerShell, dans `pc-voix` :
