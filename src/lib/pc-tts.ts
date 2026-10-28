@@ -25,7 +25,19 @@ export function pcHost() {
   }
 }
 
-export type PcHealth = { ok: boolean; warm?: boolean; model?: string | null; device?: string; gpu?: string | null; voices?: string[]; stt?: string | null; error?: string | null };
+export type PcHealth = {
+  ok: boolean;
+  warm?: boolean;
+  model?: string | null;
+  device?: string;
+  gpu?: string | null;
+  voices?: string[];
+  stt?: string | null;
+  /** Mode temps réel possible (VAD, Whisper et clé Anthropic présents). */
+  live?: boolean;
+  claude?: { configured: boolean; ok: boolean; hint: string | null; model: string; error: string | null } | null;
+  error?: string | null;
+};
 
 export async function pcHealth(timeoutMs = 6000): Promise<PcHealth> {
   const controller = new AbortController();
