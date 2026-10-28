@@ -41,8 +41,8 @@ LANGUAGES = {"fr", "en"}
 MAX_CHARS = 600
 # Naturel de la voix : exaggeration = expressivité (0,3 plat … 0,7 très expressif),
 # cfg = fidélité au rythme de la référence (0,5 par défaut ; plus bas = débit plus libre et naturel).
-EXAGGERATION = float(os.environ.get("CHATTERBOX_EXAGGERATION", "0.6"))
-CFG_WEIGHT = float(os.environ.get("CHATTERBOX_CFG", "0.4"))
+EXAGGERATION = float(os.environ.get("CHATTERBOX_EXAGGERATION", "0.5"))
+CFG_WEIGHT = float(os.environ.get("CHATTERBOX_CFG", "0.5"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo").strip()
 AUDIO_EXT = (".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac", ".opus")
 
@@ -93,13 +93,37 @@ def available_voices():
     return sorted({p.name[: -len(p.suffix)] for p in VOICES_DIR.iterdir() if p.suffix.lower() in AUDIO_EXT})
 
 
+def tidy(samples, sr: int):
+    """Rogne le silence aux deux bouts (garde 80 ms), fondu de 15 ms, niveau ramené à -1 dB :
+    évite les clics entre deux phrases et les crêtes qui grésillent sur un haut-parleur de téléphone."""
+    import numpy as np
+
+    x = np.asarray(samples, dtype=np.float32)
+    if x.size < sr // 10:
+        return x
+    peak = float(np.max(np.abs(x))) or 1.0
+    loud = np.where(np.abs(x) > peak * 0.02)[0]
+    if loud.size:
+        keep = int(sr * 0.08)
+        x = x[max(0, loud[0] - keep) : min(x.size, loud[-1] + keep)]
+    fade = min(int(sr * 0.015), x.size // 2)
+    if fade > 0:
+        ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        x[:fade] *= ramp
+        x[-fade:] *= ramp[::-1]
+    peak = float(np.max(np.abs(x))) or 1.0
+    if peak > 0.89:
+        x = x * (0.89 / peak)
+    return x
+
+
 def synthesize(text: str, language: str, voice: str) -> bytes:
     model = state["model"]
     prompt = voice_file(voice, language)
     if not prompt and language == "fr":
         log.warning("Aucune voix de référence française dans %s : la voix intégrée a un accent anglais (voir voix/README.md).", VOICES_DIR)
     wav = model.generate(text, language_id=language, audio_prompt_path=prompt, exaggeration=EXAGGERATION, cfg_weight=CFG_WEIGHT)
-    samples = wav.squeeze(0).detach().cpu().numpy()
+    samples = tidy(wav.squeeze(0).detach().cpu().numpy(), model.sr)
     buf = io.BytesIO()
     sf.write(buf, samples, model.sr, subtype="PCM_16", format="WAV")
     return buf.getvalue()

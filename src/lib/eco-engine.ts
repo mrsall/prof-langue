@@ -399,6 +399,24 @@ export class EcoEngine {
       }
     };
 
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    /**
+     * Petite réserve avant la toute première phrase : si la voix est lente à
+     * fabriquer (PC, Google), on attend que la deuxième phrase soit prête aussi,
+     * sinon la lecture s'arrête entre les deux. Au plus 2,5 s d'attente.
+     */
+    const bufferBeforeFirst = async (first: PreparedClip) => {
+      await first.ready;
+      if (this.options.speaker.choice === "phone") return;
+      const deadline = performance.now() + 2500;
+      while (!producerDone && queue.length === 0 && !aborted && performance.now() < deadline) {
+        await Promise.race([new Promise<void>((r) => (waker.fn = r)), sleep(Math.max(0, deadline - performance.now()))]);
+        waker.fn = null;
+      }
+      const second = queue[0];
+      if (second && !aborted) await Promise.race([second.ready, sleep(Math.max(0, deadline - performance.now()))]);
+    };
+    let firstClip = true;
     const player = (async () => {
       while (!aborted && !this.ended) {
         const clip = queue.shift();
@@ -407,6 +425,11 @@ export class EcoEngine {
           await new Promise<void>((r) => (waker.fn = r));
           waker.fn = null;
           continue;
+        }
+        if (firstClip) {
+          firstClip = false;
+          await bufferBeforeFirst(clip);
+          if (aborted || this.ended) return clip.dispose();
         }
         let handle: SpeakHandle | null = null;
         const started = () => {

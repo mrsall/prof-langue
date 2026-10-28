@@ -32,6 +32,8 @@ export function parseVoiceChoice(raw: string | null | undefined): VoiceChoice {
 /** Un morceau de voix dont la fabrication a déjà commencé ; `play` le joue quand c'est son tour. */
 export type PreparedClip = {
   text: string;
+  /** Résolu quand le début du morceau est prêt à être joué (sert à constituer une petite réserve). */
+  ready: Promise<void>;
   play: (onStart?: () => void) => SpeakHandle;
   /** À appeler si on ne le jouera finalement pas (libère les fichiers audio). */
   dispose: () => void;
@@ -188,6 +190,7 @@ export function chunkForTts(text: string, max = 260): string[] {
 function phoneSpeaker(language: Language): Speaker {
   const prepare = (text: string, rate: number): PreparedClip => ({
     text,
+    ready: Promise.resolve(),
     play: (onStart) => {
       const handle = speakText(text, { language, rate: clampRate(rate, 0.5, 1.5) });
       // Voix locale : elle démarre tout de suite (et certains téléphones n'annoncent pas le début).
@@ -241,6 +244,7 @@ function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, p
     let played = false;
     return {
       text,
+      ready: jobs.length > 0 ? jobs[0].then(() => undefined) : Promise.resolve(),
       dispose: () => {
         if (!played) dropFrom(0);
       },
@@ -305,6 +309,7 @@ function kokoroSpeaker(personalityId: string | null): Speaker {
     let next = jobs.length > 0 ? synthesize(jobs[0].sentence, { language, voice: jobs[0].voice, speed }).catch(() => null) : null;
     return {
       text,
+      ready: next ? next.then(() => undefined) : Promise.resolve(),
       dispose: () => undefined,
       play: (onStart) => {
         let cancelled = false;
