@@ -12,10 +12,14 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 libgomp1 ffmpeg git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-# Par défaut, la version du dépôt officiel (modèle multilingue v3, meilleur en français).
-# Si la construction échoue un jour : docker compose build --build-arg CHATTERBOX_SOURCE=chatterbox-tts==0.1.7
-ARG CHATTERBOX_SOURCE=git+https://github.com/resemble-ai/chatterbox.git
-RUN pip install --upgrade pip && pip install "${CHATTERBOX_SOURCE}" fastapi "uvicorn[standard]" soundfile
+# 1) La version publiée (connue pour s'installer sans surprise) et toutes ses dépendances.
+RUN pip install --upgrade pip && pip install "chatterbox-tts==0.1.7" fastapi "uvicorn[standard]" soundfile
+# 2) Le code plus récent du dépôt officiel (modèle multilingue v3, meilleur en français) par-dessus,
+#    sans toucher aux dépendances. Si ça ne s'importe pas, on revient à la version publiée :
+#    la construction n'échoue jamais pour ça.
+RUN (pip install --no-deps "git+https://github.com/resemble-ai/chatterbox.git" \
+      && python -c "from chatterbox.mtl_tts import ChatterboxMultilingualTTS; print('chatterbox récent OK')") \
+    || (echo "Version récente indisponible, retour à chatterbox-tts 0.1.7" && pip install --force-reinstall --no-deps "chatterbox-tts==0.1.7")
 
 COPY server.py /app/server.py
 
