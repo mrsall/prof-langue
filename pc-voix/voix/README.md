@@ -1,5 +1,7 @@
 # Voix de référence (indispensable pour le français)
 
+**Des voix de départ sont déjà fournies** dans ce dossier (une par personnage, en français et en anglais, voir `CREDITS.md`). Tu peux en remplacer n'importe laquelle par un fichier à toi : même nom, et c'est pris en compte à la phrase suivante.
+
 Chatterbox **copie la voix et l'accent** d'un court extrait de référence. Sa voix intégrée est celle d'un anglophone : sans fichier ici, le français sonne « comme un Anglais qui parle français ». Il faut donc au moins **une référence de francophone natif**, et idéalement une référence anglophone pour l'anglais.
 
 ## Fichiers acceptés

@@ -52,7 +52,7 @@ Puis Deployments → Redeploy. Dans l'app : Réglages → carte « Voix de mon P
 
 ## 5. Donner une vraie voix française (important)
 
-Sans fichier de référence, Chatterbox parle français avec un accent anglais : sa voix intégrée est celle d'un anglophone. Dépose au moins un fichier `default.fr.mp3` (voix de francophone natif, libre de droits, par exemple un chapitre LibriVox) dans le dossier `voix`, et `default.en.mp3` pour l'anglais. Tout est expliqué dans `voix/README.md`. Pas besoin de redémarrer.
+Chatterbox copie l'accent de la voix de référence ; sa voix intégrée est anglophone. Le dossier `voix` contient déjà une voix de départ par personnage, en français et en anglais (origine et licences dans `voix/CREDITS.md`). Pour en changer, remplace le fichier par un enregistrement à toi (voir `voix/README.md`). Pas besoin de redémarrer.
 
 ## Mettre à jour le serveur
 
