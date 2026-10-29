@@ -688,7 +688,9 @@ function AppInner() {
               if (!ping.ok) {
                 if (voiceChoice === "pc") voiceForSession = "eleven";
                 if (earChoice === "pc") earForSession = "groq";
-                showToast("Ton PC ne répond pas : voix ElevenLabs et oreille Groq pour cette séance.");
+                showToast(
+                  "Ton PC ne répond pas : voix ElevenLabs et oreille Groq pour cette séance.",
+                );
               }
             }
             setVoiceFallback(null);
@@ -734,8 +736,15 @@ function AppInner() {
             if (p.engine === "live" && !ending.current) {
               // PC éteint, en veille ou injoignable : on ne laisse pas Cherif sans séance.
               setError(null);
-              const fallbackOk = await startRef.current({ params: { ...params, engine: "eco" }, context, force });
-              if (fallbackOk) showToast("Ton PC ne répond pas : la séance continue en mode éco. Rallume le PC, Docker et Tailscale pour retrouver le temps réel.");
+              const fallbackOk = await startRef.current({
+                params: { ...params, engine: "eco" },
+                context,
+                force,
+              });
+              if (fallbackOk)
+                showToast(
+                  "Ton PC ne répond pas : la séance continue en mode éco. Rallume le PC, Docker et Tailscale pour retrouver le temps réel.",
+                );
               return fallbackOk;
             }
             return false;
@@ -1053,7 +1062,8 @@ function AppInner() {
       userShare,
       streak: recorded.streak,
       minutesToday: recorded.minutesToday,
-      goalReached: recorded.minutesToday >= (remote?.goalMinutes ?? progress.goalMinutes),
+      goalReached:
+        recorded.minutesToday >= (remote?.goalMinutes ?? progress.goalMinutes),
       counted,
     });
     setPhase("bilan");
@@ -1157,7 +1167,8 @@ function AppInner() {
                   streak,
                   minutesToday,
                   goalReached:
-                    minutesToday >= (remote?.goalMinutes ?? progress.goalMinutes),
+                    minutesToday >=
+                    (remote?.goalMinutes ?? progress.goalMinutes),
                 }
               : prev,
           );
@@ -2003,35 +2014,42 @@ function HomeScreen({
             </button>
           ))}
         </div>
-        <div
-          className="-mx-4 flex gap-2 overflow-x-auto px-4 py-1"
-          role="radiogroup"
-          aria-label="Mode"
-        >
-          {PERSONALITIES.map((pers) => {
-            const selected = pers.id === personality.id;
-            return (
-              <button
-                key={pers.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => onModeChange(pers.id)}
-                className={`flex shrink-0 flex-col items-center gap-1 rounded-2xl border px-3 py-2 text-xs font-medium ${
-                  selected
-                    ? "border-accent bg-accent-soft text-accent"
-                    : "border-line bg-elevated text-muted"
-                }`}
-              >
-                <PersonaAvatar
-                  style={pers.avatar}
-                  size={44}
-                  label={pers.name}
-                />
-                <span>{pers.modeLabel}</span>
-              </button>
-            );
-          })}
+        <div className="relative -mx-4">
+          {/* Fondu à droite : montre qu'on peut faire défiler (« Mise en situation » est au bout). */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-elevated to-transparent"
+          />
+          <div
+            className="flex gap-2 overflow-x-auto px-4 py-1 pr-10"
+            role="radiogroup"
+            aria-label="Mode"
+          >
+            {PERSONALITIES.map((pers) => {
+              const selected = pers.id === personality.id;
+              return (
+                <button
+                  key={pers.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => onModeChange(pers.id)}
+                  className={`flex shrink-0 flex-col items-center gap-1 rounded-2xl border px-3 py-2 text-xs font-medium ${
+                    selected
+                      ? "border-accent bg-accent-soft text-accent"
+                      : "border-line bg-elevated text-muted"
+                  }`}
+                >
+                  <PersonaAvatar
+                    style={pers.avatar}
+                    size={44}
+                    label={pers.name}
+                  />
+                  <span>{pers.modeLabel}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -2115,7 +2133,9 @@ function HomeScreen({
             </div>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="px-1 text-xs font-semibold text-muted">Qualité</span>
+            <span className="px-1 text-xs font-semibold text-muted">
+              Qualité
+            </span>
             <div
               className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
               role="radiogroup"
@@ -2128,7 +2148,9 @@ function HomeScreen({
                 ] as { key: "max" | "eco"; label: string }[]
               ).map((q) => {
                 const selected =
-                  q.key === "max" ? engine === "elevenlabs" : engine !== "elevenlabs";
+                  q.key === "max"
+                    ? engine === "elevenlabs"
+                    : engine !== "elevenlabs";
                 return (
                   <button
                     key={q.key}
@@ -2157,7 +2179,9 @@ function HomeScreen({
             </p>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="px-1 text-xs font-semibold text-muted">Vitesse</span>
+            <span className="px-1 text-xs font-semibold text-muted">
+              Vitesse
+            </span>
             <div
               className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1"
               role="radiogroup"
@@ -2521,10 +2545,10 @@ function BilanScreen({
           {notCounted
             ? "Tu n'as pas parlé : cette séance n'est pas comptée (ni minutes, ni série, ni bilan)."
             : summary?.goalReached
-            ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
-            : summary
-              ? `${summary.minutesToday} min aujourd'hui sur ${goalMinutes}. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
-              : ""}
+              ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
+              : summary
+                ? `${summary.minutesToday} min aujourd'hui sur ${goalMinutes}. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
+                : ""}
         </p>
       </header>
 
@@ -2630,7 +2654,9 @@ function BilanScreen({
                 progression.streak < progression.needed && (
                   <p className="text-xs text-muted">
                     Encore {progression.needed - progression.streak} séance
-                    {progression.needed - progression.streak > 1 ? "s" : ""}{" "}
+                    {progression.needed - progression.streak > 1
+                      ? "s"
+                      : ""}{" "}
                     comme celle-ci et tu montes d&apos;un niveau.
                   </p>
                 )}
