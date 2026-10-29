@@ -686,6 +686,36 @@ try {
     await page.goto(`${BASE}/carnet`);
     await page.getByText(/à réviser · anglais/).first().waitFor({ timeout: 15000 });
   });
+  await step("Carnet : doublon refusé à l'ajout, modifier, écouter, supprimer", async () => {
+    const add = async (word, translation = "") => (await page.request.post(`${BASE}/api/mots`, { data: { action: "add", language: "en", word, translation } })).json();
+    // Reste d'un banc précédent interrompu : on nettoie d'abord.
+    const before = await (await page.request.get(`${BASE}/api/mots?language=en`)).json();
+    for (const w of before.all.filter((x) => /could you repeat that/i.test(x.word))) await page.request.post(`${BASE}/api/mots`, { data: { action: "delete", id: w.id } });
+    const first = await add("Could you repeat that, please?", "Tu peux répéter ?");
+    if (first.duplicate) throw new Error("première entrée vue comme un doublon");
+    const dup = await add("could you repeat that");
+    if (!dup.duplicate) throw new Error("« could you repeat that » aurait dû être reconnu comme doublon");
+    await page.goto(`${BASE}/carnet`);
+    const row = page.locator("li", { hasText: "Could you repeat that, please?" }).first();
+    await row.waitFor({ timeout: 15000 });
+    await row.getByRole("button", { name: /Écouter/ }).click();
+    await row.getByRole("button", { name: /Modifier/ }).click();
+    await page.getByLabel("Traduction").fill("Vous pouvez répéter ?");
+    await page.getByRole("button", { name: "Enregistrer" }).click();
+    await page.getByText("Vous pouvez répéter ?").waitFor({ timeout: 10000 });
+    page.once("dialog", (d) => d.accept());
+    await page.locator("li", { hasText: "Could you repeat that, please?" }).first().getByRole("button", { name: /Supprimer/ }).click();
+    await page.waitForFunction(() => !document.body.textContent?.includes("Could you repeat that, please?"), null, { timeout: 10000 });
+    const mots = await (await page.request.get(`${BASE}/api/mots?language=en`)).json();
+    if (mots.all.some((w) => /could you repeat that/i.test(w.word))) throw new Error("mot toujours présent après suppression");
+    // Une révision « Je savais » doit vraiment avancer le mot (les identifiants arrivent en texte depuis la base).
+    const target = mots.all[0];
+    if (target) {
+      const rev = await (await page.request.post(`${BASE}/api/mots`, { data: { id: target.id, success: true } })).json();
+      if (!rev.ok || rev.stage !== target.stage + 1) throw new Error(`révision non enregistrée : ${JSON.stringify(rev)}`);
+    }
+    await noBlockingError();
+  });
   await page.context().close();
 
   // ------------------------------------------------------------------ Crédit ElevenLabs épuisé : chaîne de secours
