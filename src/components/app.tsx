@@ -35,6 +35,8 @@ import {
   parseVoiceChoice,
   unlockAudio,
   type VoiceChoice,
+  VOICE_LABELS,
+  type VoiceFallback,
 } from "@/lib/voice-engine";
 import {
   CORRECTION_LEVELS,
@@ -56,6 +58,7 @@ import {
   type EarChoice,
 } from "@/lib/ear";
 import type { ReglagesState } from "@/app/api/reglages/route";
+import { formatReset, type ElevenQuota } from "@/lib/quota-format";
 import type { SessionKind, ReviewWord, Rematch } from "@/lib/prompt";
 import { levelIsStale, type LevelInfo } from "@/lib/levels";
 
@@ -165,6 +168,10 @@ function AppInner() {
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** Bandeau « Voix de secours » : une autre voix que celle choisie a pris la parole. */
+  const [voiceFallback, setVoiceFallback] = useState<VoiceFallback | null>(
+    null,
+  );
   const [preparing, setPreparing] = useState(false);
   const [holding, setHolding] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -658,9 +665,11 @@ function AppInner() {
                 showToast("Ton PC ne répond pas : voix ElevenLabs et oreille Groq pour cette séance.");
               }
             }
+            setVoiceFallback(null);
             let speaker = createSpeaker(voiceForSession, {
               language: p.language,
               personalityId: p.personality.id,
+              onFallback: setVoiceFallback,
             });
             try {
               if (speaker.choice === "kokoro")
@@ -683,6 +692,7 @@ function AppInner() {
               speaker = createSpeaker("eleven", {
                 language: p.language,
                 personalityId: p.personality.id,
+                onFallback: setVoiceFallback,
               });
               setNotice(
                 `La voix ${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label ?? ""} n'a pas pu se charger : ElevenLabs prend le relais.`,
@@ -1167,6 +1177,7 @@ function AppInner() {
             })
           }
           dueWords={remote?.dueWords ?? 0}
+          quota={remote?.elevenQuota ?? null}
           dbReady={Boolean(remote?.db)}
         />
       </>
@@ -1321,6 +1332,15 @@ function AppInner() {
           className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening"
         >
           {toast}
+        </p>
+      )}
+      {voiceFallback && (
+        <p
+          role="status"
+          className="rounded-xl border border-listening/40 bg-listening/10 px-3 py-2 text-center text-xs text-listening"
+        >
+          Voix de secours : {VOICE_LABELS[voiceFallback.engine]} ·{" "}
+          {voiceFallback.reason}.
         </p>
       )}
       {capReached && (
@@ -1750,6 +1770,7 @@ function HomeScreen({
   onTest,
   dueWords,
   dbReady,
+  quota,
 }: {
   language: Language;
   onLanguageChange: (l: Language) => void;
@@ -1776,6 +1797,8 @@ function HomeScreen({
   onTest: () => void;
   dueWords: number;
   dbReady: boolean;
+  /** Crédits ElevenLabs du mois (avertissement au-delà de 80 %). */
+  quota: ElevenQuota | null;
 }) {
   const today = useToday();
   const pc = usePcStatus(pcReady);
@@ -1948,6 +1971,26 @@ function HomeScreen({
         </p>
       </section>
 
+      {quota && (quota.exhausted || (quota.pct ?? 0) >= 80) && (
+        <p
+          role="status"
+          className="rounded-2xl border border-listening/40 bg-listening/10 px-4 py-3 text-sm text-listening"
+        >
+          {quota.exhausted
+            ? "Crédit ElevenLabs épuisé"
+            : `Crédit ElevenLabs à ${quota.pct} %`}
+          {quota.used != null && quota.limit != null
+            ? ` (${quota.used.toLocaleString("fr-FR")} / ${quota.limit.toLocaleString("fr-FR")})`
+            : ""}
+          {formatReset(quota.resetAt)
+            ? `, remise à zéro le ${formatReset(quota.resetAt)}`
+            : ""}
+          .{" "}
+          {quota.exhausted
+            ? "Les séances parlent avec une voix de secours (ton PC, Kokoro ou le téléphone)."
+            : "Préfère le mode éco pour finir le mois."}
+        </p>
+      )}
       {pcReady && <PcIndicator status={pc.status} onRetry={pc.retry} />}
       <details className="rounded-2xl border border-line bg-elevated px-4 py-3">
         <summary className="cursor-pointer text-sm font-semibold">

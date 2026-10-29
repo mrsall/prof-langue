@@ -51,13 +51,14 @@ function score(name: string) {
  * la consigne à voix haute (« Lis ceci lentement… ») avant la phrase. La
  * vitesse se règle côté téléphone, à la lecture (hauteur de voix conservée).
  */
-export async function geminiSpeak(options: { text: string; voice: string; language: Language }): Promise<{ wav: Buffer; model: string }> {
+export async function geminiSpeak(options: { text: string; voice: string; language: Language; signal?: AbortSignal }): Promise<{ wav: Buffer; model: string }> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new Error("GEMINI_API_KEY manquante.");
   const model = await geminiTtsModel(apiKey);
   const res = await fetch(`${API_BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+    signal: options.signal,
     body: JSON.stringify({
       contents: [{ parts: [{ text: options.text }] }],
       generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: options.voice } } } },

@@ -174,6 +174,12 @@ const SCHEMA_STATEMENTS = [
   primary key (language, phoneme)
 )`,
   `alter table sessions add column if not exists engine text not null default 'elevenlabs'`,
+  `create table if not exists acces_tentatives (
+  id bigserial primary key,
+  ip text not null,
+  at timestamptz not null default now()
+)`,
+  `create index if not exists acces_tentatives_at_idx on acces_tentatives (at)`,
 ];
 
 /**
@@ -197,6 +203,7 @@ export async function schemaComplete(sql: Sql) {
     and to_regclass('public.errors') is not null
     and to_regclass('public.pron_attempts') is not null
     and to_regclass('public.pron_sounds') is not null
+    and to_regclass('public.acces_tentatives') is not null
     and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'engine')
     and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'observed_level') as ok`;
   return Boolean(row?.ok);

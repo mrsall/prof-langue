@@ -1,5 +1,7 @@
 "use client";
 
+import { QuotaLine } from "@/components/suivi";
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ReglagesState } from "@/app/api/reglages/route";
@@ -21,6 +23,7 @@ export function SettingsV3() {
   const [error, setError] = useState<string | null>(null);
   const [perMinute, setPerMinute] = useState("");
   const [cap, setCap] = useState("");
+  const [plan, setPlan] = useState("");
   const [hour, setHour] = useState("18");
   const [saving, setSaving] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
@@ -36,6 +39,7 @@ export function SettingsV3() {
         setState(data);
         setPerMinute(String(data.cost.perMinuteFcfa));
         setCap(String(data.cost.dailyCapMinutes));
+        setPlan(String(data.cost.planFcfa ?? 0));
         setHour(String(data.reminder.hour));
         setPushSupported("serviceWorker" in navigator && "PushManager" in window && "Notification" in window);
       })
@@ -397,8 +401,9 @@ export function SettingsV3() {
           <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">
             <h2 className="text-base font-semibold">Dépenses</h2>
             <p className="text-sm text-muted">
-              Aujourd&apos;hui : {state.todayMinutes} min sur {state.cost.dailyCapMinutes}. Ce mois-ci : ≈ {state.monthFcfa} FCFA (estimation ElevenLabs).
+              Aujourd&apos;hui : {state.todayMinutes} min sur {state.cost.dailyCapMinutes}.
             </p>
+            <QuotaLine quota={state.elevenQuota} monthFcfa={state.monthFcfa} source={state.monthFcfaSource} />
             <div className="grid grid-cols-2 gap-2">
               <label className="flex flex-col gap-1 text-xs text-muted">
                 Coût par minute (FCFA)
@@ -408,11 +413,15 @@ export function SettingsV3() {
                 Plafond par jour (minutes)
                 <input type="number" inputMode="numeric" min={1} value={cap} onChange={(e) => setCap(e.target.value)} className="h-11 rounded-xl border border-line bg-bg px-3 text-base text-fg" />
               </label>
+              <label className="col-span-2 flex flex-col gap-1 text-xs text-muted">
+                Prix mensuel de ton abonnement ElevenLabs (FCFA) — sert à calculer le vrai coût d&apos;après les crédits consommés
+                <input type="number" inputMode="numeric" min={0} value={plan} onChange={(e) => setPlan(e.target.value)} className="h-11 rounded-xl border border-line bg-bg px-3 text-base text-fg" />
+              </label>
             </div>
             <button
               type="button"
               disabled={saving}
-              onClick={() => save({ cost: { perMinuteFcfa: Number(perMinute), dailyCapMinutes: Number(cap) } })}
+              onClick={() => save({ cost: { perMinuteFcfa: Number(perMinute), dailyCapMinutes: Number(cap), planFcfa: Number(plan) } })}
               className="h-11 rounded-xl bg-accent text-sm font-bold text-accent-contrast disabled:opacity-60"
             >
               Enregistrer

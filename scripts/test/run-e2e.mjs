@@ -25,7 +25,7 @@ async function waitFor(url, ms) {
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url);
-      if (res.ok || res.status === 503) return;
+      if (res.ok || res.status === 503 || res.status === 401) return; // 401 = code d'accès actif, l'app répond
     } catch {
       // pas encore prêt
     }
@@ -57,6 +57,8 @@ const env = {
   PC_TTS_TOKEN: "test",
   GROQ_API_BASE: `http://localhost:${MOCK_PORT}`,
   MOCK_PORT: String(MOCK_PORT),
+  // Code d'accès actif pendant tout le banc : chaque page se connecte, et la dernière série vérifie le frein.
+  APP_PIN: "2468",
 };
 
 let code = 1;

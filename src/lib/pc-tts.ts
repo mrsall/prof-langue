@@ -106,11 +106,11 @@ export async function pcTranscribe(audio: Blob, language: Language): Promise<{ t
   };
 }
 
-export async function pcSpeak(options: { text: string; language: Language; voice: string }): Promise<{ wav: Buffer; generationMs: number | null }> {
+export async function pcSpeak(options: { text: string; language: Language; voice: string; timeoutMs?: number }): Promise<{ wav: Buffer; generationMs: number | null }> {
   if (!pcAvailable()) throw new Error("Voix du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
   if (pcLikelyDown()) throw new Error(DOWN_MESSAGE);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(`${pcBaseUrl()}/tts`, {

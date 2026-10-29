@@ -21,7 +21,12 @@ export function Acces() {
         router.refresh();
         return;
       }
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const data = (await res.json().catch(() => ({}))) as { error?: string; blocked?: boolean; retryAfterMinutes?: number };
+      if (res.status === 429 || data.blocked) {
+        setError(`Trop d'essais. Réessaie dans ${data.retryAfterMinutes ?? 15} min : le code est bloqué, même le bon.`);
+        setCode("");
+        return;
+      }
       setError(data.error ?? "Code incorrect.");
     } catch {
       setError("Pas de connexion. Réessaie.");

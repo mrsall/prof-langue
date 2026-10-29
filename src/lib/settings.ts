@@ -7,10 +7,11 @@ import type { Language } from "@/config/personalities";
 import { type LevelInfo } from "@/lib/levels";
 export { LEVELS, LEVEL_DESCRIPTIONS, levelIsStale, type LevelInfo } from "@/lib/levels";
 
-export type CostSettings = { perMinuteFcfa: number; dailyCapMinutes: number };
+/** `planFcfa` : prix mensuel de l'abonnement ElevenLabs en FCFA (0 = inconnu → estimation par minute). */
+export type CostSettings = { perMinuteFcfa: number; dailyCapMinutes: number; planFcfa: number };
 export type ReminderSettings = { enabled: boolean; hour: number; lastSentDay: string | null };
 
-export const DEFAULT_COST: CostSettings = { perMinuteFcfa: 60, dailyCapMinutes: 30 };
+export const DEFAULT_COST: CostSettings = { perMinuteFcfa: 60, dailyCapMinutes: 30, planFcfa: 0 };
 export const DEFAULT_REMINDER: ReminderSettings = { enabled: false, hour: 18, lastSentDay: null };
 
 export function levelKey(language: Language) {

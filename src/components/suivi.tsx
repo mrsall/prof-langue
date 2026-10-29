@@ -1,5 +1,7 @@
 "use client";
 
+import { formatReset, type ElevenQuota } from "@/lib/quota-format";
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -16,7 +18,7 @@ export function Suivi() {
 
   useEffect(() => {
     let active = true;
-    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
@@ -184,7 +186,7 @@ export function Suivi() {
             )}
           </section>
 
-          <p className="text-center text-xs text-muted">Coût estimé ce mois-ci : ≈ {data.monthFcfa} FCFA.</p>
+          <QuotaLine quota={data.elevenQuota} monthFcfa={data.monthFcfa} source={data.monthFcfaSource} />
         </>
       )}
     </main>
@@ -220,4 +222,25 @@ function fillWeeks(weeks: { start: string; minutes: number }[]) {
     out.push({ start, label: `${d.getUTCDate()}/${d.getUTCMonth() + 1}`, minutes: byStart.get(start) ?? 0 });
   }
   return out;
+}
+
+/** Vrais crédits ElevenLabs du mois, et coût en FCFA (réel si le prix de l'abonnement est réglé). */
+export function QuotaLine({ quota, monthFcfa, source }: { quota: ElevenQuota | null; monthFcfa: number; source: "quota" | "minutes" }) {
+  const reset = formatReset(quota?.resetAt ?? null);
+  const high = quota?.exhausted || (quota?.pct ?? 0) >= 80;
+  return (
+    <div className={`flex flex-col gap-1 rounded-2xl border px-4 py-3 text-xs ${high ? "border-listening/40 bg-listening/10 text-listening" : "border-line bg-elevated text-muted"}`}>
+      {quota && quota.used != null && quota.limit != null ? (
+        <p>
+          ElevenLabs : <strong>{quota.used.toLocaleString("fr-FR")} / {quota.limit.toLocaleString("fr-FR")}</strong> crédits utilisés ({quota.pct} %)
+          {reset ? `, remise à zéro le ${reset}` : ""}.{quota.exhausted ? " Crédit épuisé : les voix de secours prennent le relais." : ""}
+        </p>
+      ) : quota?.error ? (
+        <p>Crédits ElevenLabs non lus : {quota.error}</p>
+      ) : null}
+      <p>
+        Coût ce mois-ci : ≈ {monthFcfa} FCFA{source === "quota" ? " (d'après les vrais crédits)" : " (estimation par minute ; règle le prix de ton abonnement dans Réglages pour le vrai chiffre)"}.
+      </p>
+    </div>
+  );
 }
