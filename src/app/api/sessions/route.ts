@@ -1,5 +1,6 @@
 import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
 import { dayStats } from "@/lib/streak";
+import { dedupeWords } from "@/lib/words-dedupe";
 import { getCostSettings, getLevel, LEVELS, saveLevel } from "@/lib/settings";
 import { isLanguage, type Language } from "@/config/personalities";
 import type { Sql } from "postgres";
@@ -21,7 +22,8 @@ type Body = {
   transcript?: { role: "user" | "agent"; text: string }[];
   corrections?: { index: number; corrected: string }[];
   errors?: { wrong: string; right: string; tip: string }[];
-  words?: { en: string; fr: string }[];
+  /** `kind` : "mot" (défaut) ou "plus-naturel" (tournure plus polie / naturelle / précise, pas une erreur). */
+  words?: { en: string; fr: string; kind?: string }[];
   encouragement?: string | null;
   level?: string | null;
   /** Niveau observé par le bilan sur cette séance (A1 à C2). */
@@ -121,10 +123,14 @@ export async function POST(request: Request) {
       }
     }
 
-    const words = (body.words ?? []).filter((w) => w && typeof w.en === "string" && w.en.trim());
-    for (const w of words.slice(0, 8)) {
-      await sql`insert into words (language, word, translation, session_id)
-        values (${language}, ${w.en.trim()}, ${(w.fr ?? "").trim()}, ${sessionId})
+    // Dédoublonnage : ni deux fois la même entrée (casse, ponctuation, « please »), ni une entrée déjà dans le carnet.
+    const candidates = (body.words ?? []).filter((w) => w && typeof w.en === "string" && w.en.trim()).slice(0, 12);
+    const existing = candidates.length ? (await sql<{ word: string }[]>`select word from words where language = ${language} order by created_at desc limit 600`).map((r) => r.word) : [];
+    const words = dedupeWords(candidates, existing).slice(0, 8);
+    for (const w of words) {
+      const kind = w.kind === "plus-naturel" ? "plus-naturel" : "mot";
+      await sql`insert into words (language, word, translation, session_id, kind)
+        values (${language}, ${w.en.trim()}, ${(w.fr ?? "").trim()}, ${sessionId}, ${kind})
         on conflict (language, lower(word)) do nothing`;
     }
     const errors = (body.errors ?? []).filter((e) => e && typeof e.wrong === "string" && typeof e.right === "string");

@@ -1,6 +1,8 @@
 import { connection } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { askClaude } from "@/lib/claude";
+import { englishVariantNote } from "@/lib/prompt";
+import { getEnglishVariant, type EnglishVariant } from "@/lib/settings";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 
 export const maxDuration = 30;
@@ -43,17 +45,18 @@ function emptyBilan(available: boolean): BilanResult {
   return { available, words: [], errors: [], corrections: [], upgrades: [], debate: null, encouragement: null, suggestTeacher: false, teacherFocus: null, level: null, levelWhy: null };
 }
 
-function systemPrompt(language: Language, name: string, recapHint: string | undefined) {
+function systemPrompt(language: Language, name: string, recapHint: string | undefined, variant: EnglishVariant) {
   const target = language === "en" ? "English" : "French";
   return `You help Cherif, a French speaker from Senegal, improve his spoken ${target}. You receive the transcript of a spoken conversation between Cherif and ${name}.
-
+${language === "en" ? `${englishVariantNote(variant)} Everything you write in English (words, corrections, upgrades, encouragement) follows it.
+` : ""}
 Return ONLY a JSON object, no prose, no code fences, with this exact shape:
 {"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"upgrades":[{"used":"...","better":"...","why":"..."}],"debate":null,"encouragement":"...","suggestTeacher":false,"teacherFocus":"...","level":"B1","levelWhy":"..."}
 
-- "words": 3 to 5 useful ${target} words or short expressions from the conversation (ones ${name} introduced, ones Cherif asked for, or correct forms he can reuse). The key "en" holds the ${target} form, "fr" a short French translation or explanation. Beginner-friendly. No duplicates.
-- "errors": up to 3 of Cherif's most useful mistakes to fix (grammar, vocabulary, word order), each with "wrong" (what he said), "right" (the correct form) and "tip" (one short sentence in French explaining the rule). Empty array if none. Never about accent or pronunciation (you only see text).
-- "corrections": for each of Cherif's lines that contains a real mistake, its number (the [N] shown in the transcript) and the whole line rewritten correctly in natural ${target}, keeping his meaning and words as much as possible. Skip lines that are fine. At most 12 items. Speech-to-text glitches (missing punctuation, a misheard word that is obviously the transcriber's fault) are not mistakes.
-- "upgrades": up to 3 places where Cherif used a vague, repetitive or clumsy word or phrase (thing, stuff, do, nice, very good, truc, chose, faire...) or struggled to express an idea: "used" (what he said), "better" (the precise ${target} word or phrase he was looking for, or a clearer way to say his idea), "why" (one short sentence in French: when to use it). This is his main difficulty, so make these useful.
+- "words": 3 to 5 useful ${target} words or short expressions from the conversation (ones ${name} introduced, ones Cherif asked for, or correct forms he can reuse). The key "en" holds the ${target} form, "fr" a short French translation or explanation. Beginner-friendly. No duplicates, and no two entries that differ only by punctuation or a "please". Only language people actually use today: never dated or stiff phrases (e.g. "How do you do?"); if one came up, mark it in "fr" as "formel, vieilli".
+- "errors": up to 3 of Cherif's most useful REAL mistakes (grammar, vocabulary, word order), each with "wrong" (what he said), "right" (the correct form) and "tip" (one short sentence in French explaining the rule). A correct sentence that could merely be more polite, more natural or more precise is NOT an error: it goes to "upgrades". Empty array if none. Never about accent or pronunciation (you only see text).
+- "corrections": for each of Cherif's lines that contains a real mistake, its number (the [N] shown in the transcript) and the whole line rewritten correctly in natural ${target}, keeping his meaning and words as much as possible. Skip lines that are fine or merely informal. At most 12 items. Speech-to-text glitches (missing punctuation, a misheard word that is obviously the transcriber's fault) are not mistakes.
+- "upgrades": up to 3 places where Cherif said something CORRECT but vague, repetitive, clumsy or less natural than what a native speaker would say (thing, stuff, do, nice, very good, "I want to eat" where "I'd like to eat" is more polite, truc, chose, faire...), or struggled to express an idea: "used" (what he said), "better" (the precise or more natural ${target} phrase), "why" (one short sentence in French: when to use it; say "plus poli" / "plus naturel" / "plus précis"). These are alternatives, never corrections. This is his main difficulty, so make these useful.
 - "debate": null, unless the extra guidance below says this was a debate; then {"winner":"cherif"|"leo"|"draw","why":"...","side":"for"|"against"|null,"bestArgument":"...","improvements":["..."]} as described there.
 - "encouragement": one or two sentences in ${target}, in ${name}'s own voice and tone, pointing to one precise thing Cherif did well. Be honest: if the session was weak, say what he did well without inflating it, and name the one thing to work on. Never mention accent.
 - "suggestTeacher": true only if there were many mistakes (roughly 4 or more clear recurring ones) and a lesson with a teacher would help.
@@ -165,7 +168,7 @@ export async function POST(request: Request) {
       maxTokens: 4096,
       effort: "low",
       thinking: "adaptive",
-      system: systemPrompt(language, name, personality.recapHint?.[language]),
+      system: systemPrompt(language, name, personality.recapHint?.[language], language === "en" ? await getEnglishVariant().catch(() => "us" as const) : "us"),
       messages: [
         {
           role: "user",

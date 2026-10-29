@@ -47,7 +47,7 @@ export const TOPICS: Record<string, Record<Language, string[]>> = {
   debatteur: {
     en: [
       "Video games are a waste of time",
-      "PC is better than console",
+      "PCs are better than consoles",
       "AI will create more jobs than it destroys",
       "Life in the village is better than life in the city",
       "Orwell's 1984 describes today's world",
@@ -59,7 +59,7 @@ export const TOPICS: Record<string, Record<Language, string[]>> = {
     ],
     fr: [
       "Les jeux vidéo sont une perte de temps",
-      "Le PC est meilleur que la console",
+      "Le PC vaut mieux que la console",
       "L'IA créera plus d'emplois qu'elle n'en détruira",
       "La vie au village vaut mieux que la vie en ville",
       "1984 d'Orwell décrit le monde d'aujourd'hui",

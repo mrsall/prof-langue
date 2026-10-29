@@ -31,6 +31,16 @@ export async function getCostSettings(): Promise<CostSettings> {
   return { ...DEFAULT_COST, ...c };
 }
 
+/** Variante d'anglais enseignée par tous les personnages (orthographe, vocabulaire). Américain par défaut. */
+export type EnglishVariant = "us" | "uk";
+export function isEnglishVariant(v: unknown): v is EnglishVariant {
+  return v === "us" || v === "uk";
+}
+export async function getEnglishVariant(): Promise<EnglishVariant> {
+  const v = await getSetting<string>("english_variant", "us");
+  return isEnglishVariant(v) ? v : "us";
+}
+
 export async function getReminder(): Promise<ReminderSettings> {
   const r = await getSetting<Partial<ReminderSettings>>("reminder", DEFAULT_REMINDER);
   return { ...DEFAULT_REMINDER, ...r };

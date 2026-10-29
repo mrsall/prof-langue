@@ -1,5 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { askClaude } from "@/lib/claude";
+import { englishVariantNote } from "@/lib/prompt";
+import { getEnglishVariant } from "@/lib/settings";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 import { fallbackTopics, TOPICS } from "@/config/topics";
 
@@ -49,7 +51,7 @@ export async function POST(request: Request) {
       maxTokens: 1024,
       effort: "low",
       thinking: "disabled",
-      system: `You suggest conversation topics for a language-learning app. The learner is Cherif, a French speaker from Senegal who runs a banana farming business, likes tech, anime, video games, football, movies, and has a YouTube channel. Return ONLY a JSON array of 4 short topic titles (max 8 words each), in ${language === "en" ? "English" : "French"}, no prose.`,
+      system: `You suggest conversation topics for a language-learning app. The learner is Cherif, a French speaker from Senegal who runs a banana farming business, likes tech, anime, video games, football, movies, and has a YouTube channel. Return ONLY a JSON array of 4 short topic titles (max 8 words each), in ${language === "en" ? "English" : "French"}, grammatically impeccable, no prose.${language === "en" ? ` ${englishVariantNote(await getEnglishVariant().catch(() => "us" as const))}` : ""}`,
       messages: [
         {
           role: "user",

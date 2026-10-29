@@ -1,7 +1,7 @@
 import { findPersonality, isLanguage, pickFirstMessage, type Language, type Personality } from "@/config/personalities";
 import { isCorrectionLevel, type CorrectionLevel } from "@/config/correction";
 import { buildPrompt, type MemoryItem, type PastError, type Rematch, type ReviewWord, type SessionKind, type TranscriptLine } from "@/lib/prompt";
-import { getLevel, LEVEL_DESCRIPTIONS, LEVELS } from "@/lib/settings";
+import { getLevel, LEVEL_DESCRIPTIONS, LEVELS, getEnglishVariant, type EnglishVariant } from "@/lib/settings";
 import { db, dbAvailable, withTimeout } from "@/lib/db";
 
 /**
@@ -61,10 +61,11 @@ export async function prepareSession(body: SessionBody): Promise<PreparedSession
   let levelText: string | undefined;
   let recycleWords: ReviewWord[] = [];
   let pastErrors: PastError[] = [];
+  let englishVariant: EnglishVariant = "us";
   if (dbAvailable()) {
     try {
       // La séance ne doit jamais attendre la base : 1,5 s maximum, sinon on fait sans.
-      const [rows, info, errs] = await withTimeout(
+      const [rows, info, errs, variant] = await withTimeout(
         (async () => {
           const sql = await db();
           const words =
@@ -77,10 +78,11 @@ export async function prepareSession(body: SessionBody): Promise<PreparedSession
               ? await sql<{ wrong: string; right: string }[]>`select wrong, "right" from errors
                   where language = ${language} order by created_at desc limit 6`
               : [];
-          return [words, await getLevel(language), recent] as const;
+          return [words, await getLevel(language), recent, language === "en" ? await getEnglishVariant() : "us"] as const;
         })(),
         1500,
       );
+      englishVariant = variant;
       recycleWords = rows.map((r) => ({ word: r.word, translation: r.translation ?? "" }));
       pastErrors = errs.map((e) => ({ wrong: e.wrong, right: e.right }));
       if (info) {
@@ -99,6 +101,7 @@ export async function prepareSession(body: SessionBody): Promise<PreparedSession
   const prompt = buildPrompt({
     personality,
     language,
+    englishVariant,
     correction,
     topic,
     ownTopic,

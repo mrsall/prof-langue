@@ -2,7 +2,7 @@ import { connection } from "next/server";
 
 export const maxDuration = 30;
 import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, SCHEMA_SQL, setSetting, withTimeout } from "@/lib/db";
-import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
+import { DEFAULT_COST, getCostSettings, getEnglishVariant, getLevel, getReminder, isEnglishVariant, type CostSettings, type EnglishVariant } from "@/lib/settings";
 import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
 import { dayStats } from "@/lib/streak";
 import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
@@ -44,6 +44,8 @@ export type ReglagesState = {
   ears: { groq: boolean; scribe: boolean };
   /** Voix « Mon PC » (Chatterbox sur l'ordinateur de Cherif). */
   pc: { configured: boolean; host: string | null };
+  /** Variante d'anglais enseignée (us par défaut). */
+  englishVariant: EnglishVariant;
   /** Vrais crédits ElevenLabs du mois (null si la clé manque). */
   elevenQuota: ElevenQuota | null;
   /** D'où vient `monthFcfa` : des vrais crédits × prix de l'abonnement, ou des minutes estimées. */
@@ -71,6 +73,7 @@ export async function GET() {
     gemini: { configured: geminiAvailable() },
     ears: { groq: groqAvailable(), scribe: sttAvailable() },
     pc: { configured: pcAvailable(), host: pcHost() },
+    englishVariant: "us",
     elevenQuota: null,
     monthFcfaSource: "minutes",
   };
@@ -81,7 +84,7 @@ export async function GET() {
   }
   try {
     const sql = (await withTimeout(db(), 16000))!;
-    const [en, fr, cost, reminder, push, day, month, due] = await withTimeout(Promise.all([
+    const [en, fr, cost, reminder, push, day, month, due, variant] = await withTimeout(Promise.all([
       getLevel("en"),
       getLevel("fr"),
       getCostSettings(),
@@ -91,7 +94,9 @@ export async function GET() {
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
       sql<{ language: string; n: number }[]>`select language, count(*)::int as n from words where due_at <= now() group by language`,
+      getEnglishVariant(),
     ]), 15000);
+    state.englishVariant = variant;
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
       fr: fr ? { level: fr.level, date: fr.date } : null,
@@ -120,7 +125,7 @@ export async function GET() {
   return Response.json(state);
 }
 
-type Body = { cost?: Partial<CostSettings>; reminder?: { enabled?: boolean; hour?: number } };
+type Body = { cost?: Partial<CostSettings>; reminder?: { enabled?: boolean; hour?: number }; englishVariant?: string };
 
 export async function POST(request: Request) {
   if (!dbAvailable()) return Response.json({ error: "Base de données non configurée." }, { status: 400 });
@@ -140,6 +145,7 @@ export async function POST(request: Request) {
       };
       await setSetting("cost", next);
     }
+    if (isEnglishVariant(body.englishVariant)) await setSetting("english_variant", body.englishVariant);
     if (body.reminder) {
       const current = await getReminder();
       await setSetting("reminder", {

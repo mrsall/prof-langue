@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WordRow } from "@/app/api/mots/route";
 import { LANGUAGE_LABELS, type Language } from "@/config/personalities";
+import { useLocalStorage } from "@/lib/use-local-storage";
+import { VOICE_CHOICE_KEY, createSpeaker, parseVoiceChoice, unlockAudio, type Speaker } from "@/lib/voice-engine";
+import { speechSynthesisAvailable } from "@/lib/speech";
 
 /**
  * Carnet de mots : les mots à réviser aujourd'hui (révision espacée), puis
@@ -20,7 +23,46 @@ export function Carnet() {
   const [language, setLanguage] = useState<Language>("en");
   const [flipped, setFlipped] = useState(false);
   const [done, setDone] = useState(0);
+  const [editing, setEditing] = useState<{ id: WordRow["id"]; word: string; translation: string } | null>(null);
+  const [busyId, setBusyId] = useState<WordRow["id"] | null>(null);
   const router = useRouter();
+  // 🔊 : voix gratuite par défaut (téléphone, PC, Kokoro, Google) ; ElevenLabs seulement si c'est la seule voix.
+  const [rawVoice] = useLocalStorage(VOICE_CHOICE_KEY);
+  const speakerRef = useRef<{ key: string; speaker: Speaker } | null>(null);
+  const say = (text: string) => {
+    const chosen = parseVoiceChoice(rawVoice);
+    const free = chosen === "eleven" ? (speechSynthesisAvailable() ? "phone" : "eleven") : chosen;
+    const key = `${free}:${language}`;
+    if (speakerRef.current?.key !== key) speakerRef.current = { key, speaker: createSpeaker(free, { language, personalityId: "prof" }) };
+    unlockAudio();
+    speakerRef.current.speaker.speak(text, 1);
+  };
+
+  const removeWord = async (id: WordRow["id"]) => {
+    if (!window.confirm("Supprimer ce mot du carnet ?")) return;
+    setBusyId(id);
+    try {
+      await fetch("/api/mots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action: "delete" }) });
+      setState((prev) => (prev ? { ...prev, due: prev.due.filter((w) => w.id !== id), all: prev.all.filter((w) => w.id !== id) } : prev));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!editing || !editing.word.trim()) return;
+    setBusyId(editing.id);
+    try {
+      const res = await fetch("/api/mots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editing.id, action: "edit", word: editing.word, translation: editing.translation }) });
+      if (res.ok) {
+        const patch = (w: WordRow) => (w.id === editing.id ? { ...w, word: editing.word.trim(), translation: editing.translation.trim() } : w);
+        setState((prev) => (prev ? { ...prev, due: prev.due.map(patch), all: prev.all.map(patch) } : prev));
+        setEditing(null);
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -144,6 +186,12 @@ export function Carnet() {
                     </>
                   )}
                 </button>
+                <div className="flex items-center justify-between gap-2">
+                  <button type="button" onClick={() => say(current.word)} className="flex h-11 items-center gap-2 rounded-xl border border-line bg-bg px-4 text-sm font-semibold" aria-label="Écouter le mot">
+                    <span aria-hidden>🔊</span> Écouter
+                  </button>
+                  {current.kind === "plus-naturel" && <span className="rounded-full bg-accent-soft px-2.5 py-1 text-xs font-semibold text-accent">plus naturel</span>}
+                </div>
                 {flipped && (
                   <div className="grid grid-cols-2 gap-2">
                     <button type="button" onClick={() => answer(false)} className="h-12 rounded-2xl border border-line text-sm font-semibold">
@@ -177,15 +225,44 @@ export function Carnet() {
               <p className="text-sm text-muted">Les mots du jour de chaque séance arrivent ici automatiquement.</p>
             ) : (
               <ul className="flex flex-col divide-y divide-line">
-                {all.map((w) => (
-                  <li key={w.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                    <span className="flex flex-col">
-                      <span className="font-semibold">{w.word}</span>
-                      <span className="text-xs text-muted">{w.translation}</span>
-                    </span>
-                    <span className="text-xs text-muted">{stageLabel(w)}</span>
-                  </li>
-                ))}
+                {all.map((w) =>
+                  editing?.id === w.id ? (
+                    <li key={w.id} className="flex flex-col gap-2 py-3 text-sm">
+                      <input value={editing.word} onChange={(e) => setEditing({ ...editing, word: e.target.value })} className="h-11 rounded-xl border border-line bg-bg px-3 text-base text-fg" aria-label="Mot" />
+                      <input value={editing.translation} onChange={(e) => setEditing({ ...editing, translation: e.target.value })} className="h-11 rounded-xl border border-line bg-bg px-3 text-base text-fg" aria-label="Traduction" placeholder="Traduction ou explication" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <button type="button" onClick={() => setEditing(null)} className="h-11 rounded-xl border border-line text-sm font-semibold">
+                          Annuler
+                        </button>
+                        <button type="button" disabled={busyId === w.id} onClick={saveEdit} className="h-11 rounded-xl bg-accent text-sm font-bold text-accent-contrast disabled:opacity-60">
+                          Enregistrer
+                        </button>
+                      </div>
+                    </li>
+                  ) : (
+                    <li key={w.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="font-semibold">
+                          {w.word}
+                          {w.kind === "plus-naturel" && <span className="ml-2 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent">plus naturel</span>}
+                        </span>
+                        <span className="text-xs text-muted">{w.translation}</span>
+                        <span className="text-[11px] text-muted">{stageLabel(w)}</span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        <button type="button" onClick={() => say(w.word)} className="flex size-11 items-center justify-center rounded-xl border border-line bg-bg" aria-label={`Écouter ${w.word}`}>
+                          <span aria-hidden>🔊</span>
+                        </button>
+                        <button type="button" onClick={() => setEditing({ id: w.id, word: w.word, translation: w.translation ?? "" })} className="flex size-11 items-center justify-center rounded-xl border border-line bg-bg text-xs font-semibold" aria-label={`Modifier ${w.word}`}>
+                          ✎
+                        </button>
+                        <button type="button" disabled={busyId === w.id} onClick={() => removeWord(w.id)} className="flex size-11 items-center justify-center rounded-xl border border-danger/40 bg-danger/10 text-danger disabled:opacity-60" aria-label={`Supprimer ${w.word}`}>
+                          ✕
+                        </button>
+                      </span>
+                    </li>
+                  ),
+                )}
               </ul>
             )}
           </section>
