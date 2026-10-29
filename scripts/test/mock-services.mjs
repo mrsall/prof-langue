@@ -15,6 +15,10 @@ const stats = {};
 const count = (key) => (stats[key] = (stats[key] ?? 0) + 1);
 /** PC « éteint » (POST /__pc {down:true}) : plus de voix, d'oreille ni de temps réel. */
 let pcDown = false;
+/** Faux PC lent (POST /__pc {slow:true}) : la deuxième phrase d'une réplique arrive 1,5 s après la première. */
+let pcSlow = false;
+/** Journal du faux PC temps réel (GET /__live) : ordre des événements, trames reçues pendant la réponse. */
+const liveLog = { events: [], framesWhileResponding: 0, voices: [] };
 /** Crédit ElevenLabs épuisé (POST /__eleven {quota:true}) : la lecture répond 401 quota_exceeded. */
 let elevenQuota = false;
 const ELEVEN_LIMIT = 121452;
@@ -125,8 +129,16 @@ const server = http.createServer(async (req, res) => {
   count(path.startsWith("/v1/text-to-speech/") ? "tts" : path.startsWith("/v1beta/models/") ? "gemini" : path);
   if (req.method === "GET" && path === "/__stats") return json(res, 200, stats);
   if (req.method === "POST" && path === "/__pc") {
-    pcDown = Boolean(JSON.parse(raw.toString("utf8") || "{}").down);
-    return json(res, 200, { down: pcDown });
+    const body = JSON.parse(raw.toString("utf8") || "{}");
+    if ("down" in body) pcDown = Boolean(body.down);
+    if ("slow" in body) pcSlow = Boolean(body.slow);
+    return json(res, 200, { down: pcDown, slow: pcSlow });
+  }
+  if (req.method === "GET" && path === "/__live") return json(res, 200, liveLog);
+  if (req.method === "POST" && path === "/__live/reset") {
+    liveLog.events = [];
+    liveLog.framesWhileResponding = 0;
+    return json(res, 200, { ok: true });
   }
   if (pcDown && path.startsWith("/pc/")) return json(res, 503, { detail: "PC éteint (simulation)" });
   if (req.method === "POST" && path === "/__eleven") {
@@ -194,7 +206,16 @@ const server = http.createServer(async (req, res) => {
 
   // ---- PC de Cherif (Chatterbox)
   if (req.method === "GET" && path === "/pc/health") {
-    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami"], stt: "faster-whisper large-v3-turbo (cuda)", live: true, claude: { configured: true, ok: true, hint: "sk-ant-…test", model: "test", error: null }, error: null });
+    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami", ...liveLog.voices], stt: "faster-whisper large-v3-turbo (cuda)", live: true, claude: { configured: true, ok: true, hint: "sk-ant-…test", model: "test", error: null }, rtf: { count: 12, avg: pcSlow ? 1.6 : 0.7, last: pcSlow ? 1.7 : 0.6 }, engines: ["multilingual", "turbo"], engine: "multilingual", error: null });
+  }
+  if (req.method === "POST" && path === "/pc/voices") {
+    if (req.headers.authorization !== "Bearer test") return json(res, 401, { detail: "Mot de passe refusé." });
+    if (raw.length < 5000) return json(res, 400, { detail: "Enregistrement vide ou trop court." });
+    const m = raw.toString("latin1").match(/name="voice"\r\n\r\n([a-z-]+)/);
+    const lang = raw.toString("latin1").match(/name="language"\r\n\r\n([a-z]+)/);
+    const file = `${m?.[1] ?? "prof"}.${lang?.[1] ?? "fr"}`;
+    if (!liveLog.voices.includes(file)) liveLog.voices.push(file);
+    return json(res, 200, { ok: true, file: `${file}.wav`, seconds: 12.4, voices: ["prof", "ami", ...liveLog.voices] });
   }
   if (req.method === "POST" && path === "/pc/stt") {
     if (req.headers.authorization !== "Bearer test") return json(res, 401, { detail: "Mot de passe refusé." });
@@ -210,7 +231,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (/PANNE/.test(body.text ?? "")) return json(res, 503, { detail: "GPU occupé" }); // simule un PC en difficulté
     const wav = silentWav(0.4);
-    res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": String(wav.length), "X-Generation-Ms": "320" });
+    const engine = body.engine === "turbo" ? "turbo" : "multilingual";
+    res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": String(wav.length), "X-Generation-Ms": engine === "turbo" ? "180" : "320", "X-Audio-Ms": "400", "X-Rtf": engine === "turbo" ? "0.45" : "0.8", "X-Engine": engine });
     return res.end(wav);
   }
 
@@ -281,14 +303,23 @@ server.on("upgrade", (req, socket, head) => {
     let loud = 0;
     let quiet = 0;
     let responding = false;
+    // Le personnage « parle » depuis le premier morceau envoyé jusqu'à ce que le téléphone dise playback:off.
+    let playing = false;
     let turns = 0;
     const send = (o) => ws.readyState === 1 && ws.send(JSON.stringify(o));
-    const speak = async (text) => {
-      send({ type: "speak", text, seq: 1 });
+    let seq = 0;
+    const speak = async (text, claudeMs = null) => {
+      seq += 1;
+      playing = true;
+      liveLog.events.push(`speak${seq}`);
+      send({ type: "speak", text, seq });
       ws.send(silentWav(0.3));
+      // Étape 0 : un `timing` par morceau ; RTF > 1 quand le faux PC est « lent ».
+      send({ type: "timing", seq, claudeMs, voiceMs: pcSlow ? 500 : 180, audioMs: 300, rtf: pcSlow ? 1.7 : 0.6 });
     };
     const reply = async (userText) => {
       responding = true;
+      seq = 0;
       send({ type: "partial", text: userText.split(" ").slice(0, 2).join(" ") });
       await new Promise((r) => setTimeout(r, 80));
       send({ type: "user", text: userText });
@@ -297,9 +328,11 @@ server.on("upgrade", (req, socket, head) => {
         send({ type: "delta", text: piece });
         await new Promise((r) => setTimeout(r, 10));
       }
-      await speak("Très bien, Cherif.");
-      send({ type: "timing", claudeMs: 420, voiceMs: 310 });
+      await speak("Très bien, Cherif.", 420);
+      // PC lent : la deuxième phrase met 1,5 s à se fabriquer (plus que la durée de la première).
+      await new Promise((r) => setTimeout(r, pcSlow ? 1500 : 30));
       await speak("Et après le café, qu'est-ce que tu as fait ?");
+      liveLog.events.push("agent");
       send({ type: "agent", text: answer });
       turns += 1;
       responding = false;
@@ -310,10 +343,18 @@ server.on("upgrade", (req, socket, head) => {
       if (!isBinary) {
         const cmd = JSON.parse(data.toString());
         log("live ←", cmd.type);
-        if (cmd.type === "start") {
+        if (cmd.type === "playback") {
+          liveLog.events.push(`playback:${cmd.playing ? "on" : "off"}`);
+          if (!cmd.playing) playing = false;
+        } else if (cmd.type === "start") {
           if (!/^\d+\.[0-9a-f]{64}$/.test(cmd.ticket ?? "")) return send({ type: "error", message: "Ticket refusé", fatal: true });
           send({ type: "ready" });
-          void speak(cmd.firstMessage).then(() => send({ type: "agent", text: cmd.firstMessage }));
+          responding = true;
+          void speak(cmd.firstMessage).then(() => {
+            liveLog.events.push("agent");
+            send({ type: "agent", text: cmd.firstMessage });
+            responding = false;
+          });
         } else if (cmd.type === "repeat") {
           void speak("Et après le café, qu'est-ce que tu as fait ?");
         } else if (cmd.type === "flush") {
@@ -326,6 +367,7 @@ server.on("upgrade", (req, socket, head) => {
         return;
       }
       // Trames PCM 16 bits : énergie moyenne → « voix » ou « silence ».
+      if (responding || playing) liveLog.framesWhileResponding += 1;
       const pcm = new Int16Array(data.buffer, data.byteOffset, Math.floor(data.byteLength / 2));
       let sum = 0;
       for (let i = 0; i < pcm.length; i += 4) sum += pcm[i] * pcm[i];

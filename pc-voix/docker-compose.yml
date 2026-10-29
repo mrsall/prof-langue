@@ -15,10 +15,16 @@ services:
       # 0,5 / 0,5 = réglage le plus stable (moins d'artefacts) ; monte l'expressivité par petits pas si la voix te semble plate.
       - CHATTERBOX_EXAGGERATION=0.5
       - CHATTERBOX_CFG=0.5
+      # Vitesse de fabrication (voir le RTF dans Admin → Mon PC). Si RTF > 1, essaie dans l'ordre :
+      #   CHATTERBOX_FP16=1 (demi-précision, plus rapide), puis CHATTERBOX_CFG=0 (sans guidage, ≈ 2 fois moins de calcul ; écoute si l'accent tient).
+      - CHATTERBOX_FP16=0
+      # Moteur pour l'anglais : multilingual (défaut) ou turbo (Chatterbox Turbo, plus léger ; le français reste multilingue).
+      - PC_TTS_ENGINE=multilingual
       # Oreille : modèle Whisper (large-v3-turbo : rapide et précis sur une 4070 ; "medium" si la mémoire manque).
       - WHISPER_MODEL=large-v3-turbo
     volumes:
-      - ./voix:/voix:ro
+      # en écriture : Admin → « Enregistrer une voix » dépose les voix de référence ici
+      - ./voix:/voix
       - modeles:/cache
     restart: unless-stopped
     deploy:

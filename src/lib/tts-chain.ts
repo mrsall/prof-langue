@@ -3,7 +3,7 @@ import { resolveVoiceId } from "@/lib/tts-voices";
 import { ELEVENLABS_API_BASE } from "@/lib/elevenlabs-api";
 import { geminiAvailable, geminiSpeak } from "@/lib/gemini";
 import { geminiVoiceFor } from "@/config/gemini-voices";
-import { pcAvailable, pcLikelyDown, pcSpeak } from "@/lib/pc-tts";
+import { pcAvailable, pcLikelyDown, pcSpeak, type PcVoiceEngine } from "@/lib/pc-tts";
 
 /**
  * Chaîne de secours unique pour la voix lue par le serveur (/api/tts) :
@@ -97,7 +97,7 @@ async function pcSpeakFast(req: TtsRequest): Promise<{ audio: Buffer; contentTyp
   if (!pcAvailable()) throw new Error("voix du PC non configurée");
   if (pcLikelyDown()) throw new Error("PC injoignable (éteint, en veille, ou Docker/Tailscale arrêtés)");
   const voice = req.role === "judge" ? "juge" : req.personalityId || "prof";
-  const { wav } = await pcSpeak({ text: req.text, language: req.language, voice, timeoutMs: PC_TIMEOUT_MS });
+  const { wav } = await pcSpeak({ text: req.text, language: req.language, voice, timeoutMs: PC_TIMEOUT_MS, engine: req.pcEngine ?? null });
   return { audio: wav, contentType: "audio/wav" };
 }
 
@@ -111,7 +111,7 @@ async function geminiSpeakFast(req: TtsRequest): Promise<{ audio: Buffer; conten
   return { audio: wav, contentType: "audio/wav" };
 }
 
-export type TtsRequest = { text: string; language: Language; personalityId: string | null; role: "main" | "judge"; speed: number };
+export type TtsRequest = { text: string; language: Language; personalityId: string | null; role: "main" | "judge"; speed: number; pcEngine?: PcVoiceEngine | null };
 
 /** Ordre d'essai : le moteur demandé d'abord, puis ElevenLabs, puis le PC. Google seulement s'il est demandé. */
 export function engineOrder(requested: ServerEngine): ServerEngine[] {

@@ -20,10 +20,25 @@ export type LiveOptions = {
   language: Language;
   rate: number;
   handsFree: boolean;
+  /**
+   * Mains libres : laisser le PC écouter pendant que le personnage parle, pour le couper à la voix.
+   * Faux par défaut (haut-parleur du téléphone : le micro entend le personnage) : le micro ne part pas
+   * pendant la réponse, et Cherif coupe en appuyant sur le micro. Vrai conseillé avec des écouteurs.
+   */
+  voiceBargeIn?: boolean;
   history?: TranscriptLine[];
   firstMessage?: string | null;
   callbacks: EcoCallbacks;
 };
+
+/** Réserve d'audio avant de lancer la lecture d'une réplique (voir `maybeStartPlayback`). */
+const RESERVE_CHUNKS = 2;
+const RESERVE_SECONDS = 3;
+const FAST_RTF = 0.8;
+const WAIT_FAST_MS = 2500;
+const WAIT_SLOW_MS = 12000;
+/** Sans nouveau son pendant ce temps au milieu d'une réplique, on rend la main (PC muet, réseau coupé). */
+const GAP_GIVE_UP_MS = 15000;
 
 type ServerEvent =
   | { type: "ready" }
@@ -33,7 +48,8 @@ type ServerEvent =
   | { type: "speak"; text: string; seq: number }
   | { type: "agent"; text: string }
   | { type: "interrupt" }
-  | { type: "timing"; claudeMs: number; voiceMs: number }
+  | { type: "timing"; claudeMs: number | null; voiceMs: number; seq?: number; audioMs?: number; rtf?: number | null }
+  | { type: "playback"; playing: boolean }
   | { type: "error"; message: string; fatal?: boolean }
   | { type: "end" };
 
@@ -57,11 +73,34 @@ export class LiveEngine {
   private generation = 0;
   /** Nombre de répliques échangées : distingue une coupure immédiate d'une coupure en cours de séance. */
   private exchanges = 0;
+  private voiceBargeIn: boolean;
+  /** Vitesse de fabrication mesurée par le PC : temps de fabrication / durée de l'audio (moyenne glissante). */
+  private rtf: number | null = null;
+  // ---- réplique en cours : réserve avant de parler, pas de bascule en « écoute » entre deux morceaux
+  private replyActive = false;
+  private agentDone = true;
+  private playbackStarted = false;
+  private pendingBuffers: AudioBuffer[] = [];
+  private firstChunkAt = 0;
+  private startTimer: number | null = null;
+  private gapTimer: number | null = null;
+  private playingReported = false;
 
   constructor(private readonly options: LiveOptions) {
     this.history = [...(options.history ?? [])];
     this.handsFree = options.handsFree;
     this.rate = options.rate;
+    this.voiceBargeIn = Boolean(options.voiceBargeIn);
+  }
+
+  /** Mains libres : couper le personnage à la voix (oui) ou seulement en appuyant sur le micro (non). */
+  setVoiceBargeIn(enabled: boolean) {
+    this.voiceBargeIn = enabled;
+  }
+
+  /** Une réponse est en cours (Claude écrit, voix en fabrication ou en lecture). */
+  get agentBusy() {
+    return this.replyActive;
   }
 
   readonly usesPhoneRecognition = false;
@@ -214,9 +253,13 @@ export class LiveEngine {
           if (this.ended || !this.ws || this.ws.readyState !== WebSocket.OPEN)
             return;
           if (this.muted || (!this.handsFree && !this.holding)) return;
+          // Haut-parleur : le micro entend le personnage. Sans « couper à la voix », rien ne part pendant la réponse.
+          if (this.handsFree && !this.voiceBargeIn && this.replyActive) return;
           this.ws.send(pcm.buffer);
         },
         (level) => (this.level = level),
+        // Même AudioContext que la lecture : l'annulation d'écho du navigateur reconnaît mieux le son joué.
+        this.audio ?? undefined,
       );
     } catch (error) {
       cb.onError(
@@ -258,12 +301,15 @@ export class LiveEngine {
   /** Cherif coupe la parole : on arrête le son ici et on prévient le PC. */
   interrupt() {
     this.stopPlayback();
+    this.endReply();
     this.send({ type: "interrupt" });
     this.setMode(this.muted ? "idle" : "listening");
   }
 
   repeatLast() {
     if (!this.lastAgentText || this.ended) return;
+    this.stopPlayback();
+    this.endReply();
     this.send({ type: "repeat" });
   }
 
@@ -272,6 +318,7 @@ export class LiveEngine {
     const clean = text.trim();
     if (!clean || this.ended || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     this.stopPlayback();
+    this.endReply();
     this.send({ type: "text", text: clean });
     return true;
   }
@@ -329,6 +376,135 @@ export class LiveEngine {
     this.sources = [];
     this.nextStart = 0;
     this.pendingSpeak = null;
+    this.pendingBuffers = [];
+    this.playbackStarted = false;
+    if (this.startTimer) {
+      clearTimeout(this.startTimer);
+      this.startTimer = null;
+    }
+    if (this.gapTimer) {
+      clearTimeout(this.gapTimer);
+      this.gapTimer = null;
+    }
+    this.reportPlayback(false);
+  }
+
+  // ---- réplique : réserve avant de parler, puis lecture continue jusqu'à la fin
+
+  private beginReply() {
+    this.replyActive = true;
+    this.agentDone = false;
+    this.playbackStarted = false;
+    this.pendingBuffers = [];
+    this.firstChunkAt = 0;
+  }
+
+  private endReply() {
+    this.replyActive = false;
+    this.agentDone = true;
+    this.pendingBuffers = [];
+    this.playbackStarted = false;
+    this.firstChunkAt = 0;
+    if (this.gapTimer) {
+      clearTimeout(this.gapTimer);
+      this.gapTimer = null;
+    }
+    this.reportPlayback(false);
+  }
+
+  /** Dit au PC ce que le téléphone joue vraiment (plus fiable que son estimation). */
+  private reportPlayback(playing: boolean) {
+    if (this.playingReported === playing) return;
+    this.playingReported = playing;
+    this.send({ type: "playback", playing });
+  }
+
+  private reserveSeconds() {
+    return this.pendingBuffers.reduce((n, b) => n + b.duration, 0);
+  }
+
+  /**
+   * Première lecture d'une réplique : on attend une petite réserve pour ne jamais commencer une phrase
+   * qu'on devrait interrompre en attendant la suivante. Si le PC fabrique moins vite qu'il ne se lit
+   * (RTF > 1, ou inconnu), on attend la fin de la réponse (`agent`) ; sinon 2 morceaux, 3 s d'audio,
+   * ou 2,5 s d'attente. Pendant ce temps, le personnage « réfléchit ».
+   */
+  private maybeStartPlayback() {
+    if (this.playbackStarted || this.pendingBuffers.length === 0) return;
+    const waited = this.firstChunkAt ? performance.now() - this.firstChunkAt : 0;
+    const slow = this.rtf == null || this.rtf > 1;
+    const ready =
+      this.agentDone ||
+      (!slow &&
+        (this.pendingBuffers.length >= RESERVE_CHUNKS ||
+          this.reserveSeconds() >= RESERVE_SECONDS ||
+          (this.rtf != null && this.rtf <= FAST_RTF))) ||
+      waited >= (slow ? WAIT_SLOW_MS : WAIT_FAST_MS);
+    if (!ready) {
+      if (!this.startTimer) {
+        const delay = Math.max(50, (slow ? WAIT_SLOW_MS : WAIT_FAST_MS) - waited);
+        this.startTimer = window.setTimeout(() => {
+          this.startTimer = null;
+          this.maybeStartPlayback();
+        }, delay);
+      }
+      return;
+    }
+    if (this.startTimer) {
+      clearTimeout(this.startTimer);
+      this.startTimer = null;
+    }
+    this.playbackStarted = true;
+    for (const buffer of this.pendingBuffers.splice(0)) this.schedule(buffer);
+  }
+
+  private schedule(buffer: AudioBuffer) {
+    const ctx = this.audio;
+    if (!ctx || this.ended) return;
+    const generation = this.generation;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    const startAt = Math.max(ctx.currentTime + 0.02, this.nextStart);
+    source.start(startAt);
+    this.nextStart = startAt + buffer.duration;
+    this.sources.push(source);
+    this.setMode("speaking");
+    this.reportPlayback(true);
+    if (this.gapTimer) {
+      clearTimeout(this.gapTimer);
+      this.gapTimer = null;
+    }
+    source.onended = () => {
+      this.sources = this.sources.filter((s) => s !== source);
+      if (generation !== this.generation || this.ended) return;
+      if (this.sources.length === 0) {
+        this.reportPlayback(false);
+        this.maybeFinishReply();
+      }
+    };
+  }
+
+  /** Tout est joué et la réponse est finie : on rend la main. Entre deux morceaux, on reste « en train de parler ». */
+  private maybeFinishReply() {
+    if (this.sources.length > 0 || this.pendingBuffers.length > 0) return;
+    if (!this.agentDone) {
+      // Trou au milieu de la réplique : la suite arrive. Si rien ne vient, on finit par rendre la main.
+      if (!this.gapTimer) {
+        this.gapTimer = window.setTimeout(() => {
+          this.gapTimer = null;
+          if (this.sources.length === 0 && this.pendingBuffers.length === 0) {
+            this.endReply();
+            if (this.mode === "speaking") this.setMode(this.muted ? "idle" : "listening");
+          }
+        }, GAP_GIVE_UP_MS);
+      }
+      return;
+    }
+    if (!this.playbackStarted && this.replyActive) return;
+    this.endReply();
+    if (this.mode === "speaking" || this.mode === "thinking")
+      this.setMode(this.muted ? "idle" : "listening");
   }
 
   private handleEvent(msg: ServerEvent) {
@@ -342,6 +518,7 @@ export class LiveEngine {
         this.history.push({ role: "user", text: msg.text });
         cb.onMessage({ role: "user", message: msg.text });
         this.draft = "";
+        this.beginReply();
         this.setMode("thinking");
         break;
       case "delta":
@@ -358,14 +535,23 @@ export class LiveEngine {
         this.lastAgentText = msg.text;
         this.history.push({ role: "agent", text: msg.text });
         cb.onMessage({ role: "agent", message: msg.text });
+        // Fin de la réponse : tout ce qui est en réserve part maintenant.
+        this.agentDone = true;
+        this.maybeStartPlayback();
+        this.maybeFinishReply();
         break;
       case "interrupt":
         this.stopPlayback();
+        this.endReply();
         cb.onDraft?.(null);
         this.setMode(this.muted ? "idle" : "listening");
         break;
       case "timing":
-        cb.onTiming?.({ claudeMs: msg.claudeMs, voiceMs: msg.voiceMs });
+        // Étape 0 : RTF mesuré par le PC (fabrication / durée), moyenne glissante pour décider de la réserve.
+        if (typeof msg.rtf === "number" && msg.rtf > 0)
+          this.rtf = this.rtf == null ? msg.rtf : this.rtf * 0.6 + msg.rtf * 0.4;
+        if (msg.claudeMs != null)
+          cb.onTiming?.({ claudeMs: msg.claudeMs, voiceMs: msg.voiceMs });
         break;
       case "error":
         cb.onError(msg.message, { fatal: Boolean(msg.fatal) });
@@ -379,7 +565,7 @@ export class LiveEngine {
     }
   }
 
-  /** Un morceau de voix (WAV) : décodé puis calé juste après le précédent, sans trou. */
+  /** Un morceau de voix (WAV) : décodé, mis en réserve ou calé juste après le précédent, sans trou. */
   private async handleAudio(data: ArrayBuffer) {
     const ctx = this.audio;
     if (!ctx || this.ended) return;
@@ -391,24 +577,19 @@ export class LiveEngine {
       return;
     }
     if (generation !== this.generation || this.ended) return;
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    const startAt = Math.max(ctx.currentTime + 0.02, this.nextStart);
-    source.start(startAt);
-    this.nextStart = startAt + buffer.duration;
-    this.sources.push(source);
-    this.setMode("speaking");
-    source.onended = () => {
-      this.sources = this.sources.filter((s) => s !== source);
-      if (
-        this.sources.length === 0 &&
-        generation === this.generation &&
-        !this.ended &&
-        this.mode === "speaking"
-      ) {
-        this.setMode(this.muted ? "idle" : "listening");
-      }
-    };
+    if (!this.replyActive) {
+      // Première réplique de la séance (pas de « user » avant) ou « Répète ».
+      this.beginReply();
+    }
+    if (this.playbackStarted) {
+      this.schedule(buffer);
+      return;
+    }
+    if (this.pendingBuffers.length === 0) {
+      this.firstChunkAt = performance.now();
+      this.setMode("thinking");
+    }
+    this.pendingBuffers.push(buffer);
+    this.maybeStartPlayback();
   }
 }

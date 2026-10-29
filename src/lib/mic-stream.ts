@@ -14,6 +14,8 @@ const TARGET_RATE = 16000;
 export async function startMicStream(
   onFrame: (pcm: Int16Array) => void,
   onLevel?: (level: number) => void,
+  /** Contexte audio à partager avec la lecture (meilleure annulation d'écho) ; sinon un contexte à part. */
+  sharedContext?: AudioContext,
 ): Promise<MicStream> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia)
     throw new Error("Ce navigateur ne donne pas accès au micro.");
@@ -33,7 +35,8 @@ export async function startMicStream(
     stream.getTracks().forEach((t) => t.stop());
     throw new Error("Ce navigateur ne sait pas traiter le son.");
   }
-  const ctx = new Ctx();
+  const ctx = sharedContext ?? new Ctx();
+  const ownsContext = !sharedContext;
   if (ctx.state === "suspended") await ctx.resume().catch(() => undefined);
   const source = ctx.createMediaStreamSource(stream);
   const processor = ctx.createScriptProcessor(4096, 1, 1);
@@ -71,7 +74,7 @@ export async function startMicStream(
         // déjà déconnecté
       }
       stream.getTracks().forEach((t) => t.stop());
-      void ctx.close().catch(() => undefined);
+      if (ownsContext) void ctx.close().catch(() => undefined);
     },
   };
 }

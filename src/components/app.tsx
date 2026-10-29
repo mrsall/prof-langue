@@ -109,6 +109,7 @@ const LANGUAGE_KEY = "prof-langue:language";
 const MODE_KEY = "prof-langue:mode";
 const ENGINE_KEY = "prof-langue:engine";
 const AUTO_KEY = "prof-langue:auto";
+const BARGE_IN_KEY = "prof-langue:barge-in";
 
 const REPEAT_COMMAND: Record<Language, string> = {
   en: "Please say your last sentence again, a little slower.",
@@ -153,6 +154,9 @@ function AppInner() {
       : "elevenlabs";
   // « Économique (auto) » : l'app choisit la voix et l'oreille du mode éco au début de chaque séance.
   const [savedAuto, setSavedAuto] = useLocalStorage(AUTO_KEY);
+  // Temps réel, mains libres : couper le personnage à la voix (écouteurs) ou seulement en appuyant sur le micro (haut-parleur).
+  const [savedBargeIn, setSavedBargeIn] = useLocalStorage(BARGE_IN_KEY);
+  const voiceBargeIn = savedBargeIn === "1";
   const autoEco = savedAuto === "1";
   // Voix et oreille détaillées : réglées dans /reglages/avance (mêmes clés de stockage).
   const [savedVoiceChoice] = useLocalStorage(VOICE_CHOICE_KEY);
@@ -427,6 +431,10 @@ function AppInner() {
   useEffect(() => {
     ecoRef.current?.setHandsFree(handsFree);
   }, [handsFree]);
+  useEffect(() => {
+    const eng = ecoRef.current;
+    if (eng instanceof LiveEngine) eng.setVoiceBargeIn(voiceBargeIn);
+  }, [voiceBargeIn]);
 
   // Plafond du jour (dérivé, pas d'état). Le mode éco ne consomme pas de minutes.
   const capReached =
@@ -656,7 +664,7 @@ function AppInner() {
           let eng: EcoEngine | LiveEngine;
           if (p.engine === "live") {
             // Temps réel : oreille, Claude et voix tournent sur le PC de Cherif ; le téléphone envoie le micro en continu.
-            eng = new LiveEngine(common);
+            eng = new LiveEngine({ ...common, voiceBargeIn });
           } else {
             // Voix ou oreille « Mon PC » : on vérifie le PC en 3 s, sinon repli immédiat plutôt qu'une attente à chaque phrase.
             let voiceForSession = voiceChoice;
@@ -843,6 +851,7 @@ function AppInner() {
       earChoice,
       showToast,
       autoEco,
+      voiceBargeIn,
       remote,
     ],
   );
@@ -1628,6 +1637,18 @@ function AppInner() {
             ? "Passer en appui pour parler (endroit bruyant)"
             : "Passer en mains libres"}
         </button>
+        {(live?.engine ?? engine) === "live" && handsFree && (
+          <button
+            type="button"
+            onClick={() => setSavedBargeIn(voiceBargeIn ? "0" : "1")}
+            aria-pressed={voiceBargeIn}
+            className="min-h-11 text-xs text-muted underline"
+          >
+            {voiceBargeIn
+              ? "Me couper à la voix : oui (écouteurs)"
+              : "Me couper à la voix : non (appuie sur le micro)"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setTyping((t) => !t)}

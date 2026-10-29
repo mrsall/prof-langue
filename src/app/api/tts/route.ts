@@ -28,7 +28,9 @@ export async function GET(request: Request) {
   const role = url.searchParams.get("role") === "judge" ? "judge" : "main";
 
   try {
-    const result = await speakWithChain(engine, { text, language, personalityId, role, speed });
+    const pcEngineRaw = url.searchParams.get("pcEngine");
+    const pcEngine = pcEngineRaw === "turbo" || pcEngineRaw === "multilingual" ? pcEngineRaw : null;
+    const result = await speakWithChain(engine, { text, language, personalityId, role, speed, pcEngine });
     const headers = new Headers({
       "Content-Type": result.contentType,
       "Cache-Control": "private, max-age=86400",

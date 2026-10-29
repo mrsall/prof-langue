@@ -60,8 +60,10 @@ Le même conteneur fait tourner Whisper (modèle `large-v3-turbo`) sur ta carte 
 
 ## 7. Rendre la voix plus naturelle
 
-- Le plus efficace : remplacer les voix de référence fournies (voix de synthèse Piper, un peu plates) par un **enregistrement humain** de 10 à 15 s (voir `voix/README.md`).
+- **Le plus efficace : enregistrer une vraie voix depuis ton téléphone.** Dans l'app, Admin → « Enregistrer une voix » : choisis le personnage et la langue, lis le texte affiché (15 s, comme dans une conversation), réécoute, envoie. Le PC l'installe tout seul comme voix de référence (`voix/<personnage>.<langue>.wav`), sans redémarrer. Les 14 voix livrées sont des voix de synthèse Piper : Chatterbox clonait une voix déjà plate, aucun réglage ne compensait ça. Conseils : pièce calme, téléphone à 20 cm, parler naturellement (une question, une réaction, une blague), 10 à 15 s, sans musique. Fais enregistrer des proches ; il faut au moins une voix de femme pour Emma. Le dossier `voix` doit être en écriture (c'est le cas dans le `docker-compose.yml` fourni : `./voix:/voix`).
 - Deux réglages dans `docker-compose.yml`, puis `docker compose up -d` : `CHATTERBOX_EXAGGERATION` (0,3 = plat, 0,6 = conversation, 0,7 = très expressif) et `CHATTERBOX_CFG` (0,5 = colle au rythme de la référence, 0,3 = débit plus libre et plus vivant).
+- **Vitesse de fabrication (RTF)** : le serveur mesure, pour chaque phrase, le temps de fabrication divisé par la durée du son (visible dans Admin → Mon PC, et dans les journaux `docker compose logs -f` : `voix [multilingual] 84 caractères · fabrication 3.10 s · audio 4.20 s · RTF 0.74`). Au-dessus de 1, la carte fabrique moins vite qu'elle ne lit : le téléphone attend alors la fin de la réponse avant de parler (pas de phrase coupée, mais plus d'attente). Pour descendre sous 1, dans l'ordre : `CHATTERBOX_FP16=1` (demi-précision), puis `CHATTERBOX_CFG=0` (sans guidage, environ deux fois moins de calcul ; écoute si l'accent tient). Compare le RTF avant et après et garde le meilleur.
+- **Autre moteur pour l'anglais** : `PC_TTS_ENGINE=turbo` charge Chatterbox Turbo (plus léger, anglais seulement ; le français reste sur le multilingue). La page `/test-voix-pc` de l'app fait dire la même phrase par chaque moteur chargé avec les temps mesurés. Kyutai TTS (français et anglais, pensé pour le temps réel, voix fournies mais pas de clonage) reste une piste à essayer plus tard.
 
 ## 8. V5 : mode « Temps réel (mon PC) »
 
@@ -80,6 +82,9 @@ Le PC ne reçoit que du son et du texte de séance ; rien n'est enregistré sur 
 
 ## 9. Si le mode temps réel se coupe ou ne répond plus
 
+- **La voix du personnage se coupe puis reprend quelques secondes après, alors que personne ne parle** : la carte fabrique la voix moins vite qu'elle ne se lit (RTF > 1, voir section 7). Depuis le 29 oct., le téléphone attend la fin de la réponse avant de parler quand c'est le cas, et ne rend plus la main entre deux morceaux ; pendant l'attente, l'écran dit « réfléchit… ». Pour réduire l'attente : les réglages de vitesse de la section 7.
+- **Le personnage se coupe lui-même en mains libres** (il entend sa propre voix dans le micro du téléphone) : par défaut, pendant qu'il répond, le micro n'est plus envoyé au PC et tu le coupes en appuyant sur le micro. Avec des écouteurs, active « Me couper à la voix : oui » sur l'écran de séance : le PC n'interrompt alors que sur une vraie phrase de toi (au moins deux mots, différente de ce qu'il vient de dire). Test simple : une séance mains libres avec écouteurs ; si les coupures disparaissent, c'était l'écho.
+
 - **Le PC s'est mis en veille** (souvent la nuit) : Tailscale et Docker ne répondent plus. Réveille-le, puis Windows → Paramètres → Système → Alimentation : règle « Mettre en veille » sur « Jamais » quand il est branché.
 - **Docker ou Tailscale ne tournent plus** : dans PowerShell, dans `pc-voix`, `docker compose up -d` puis `tailscale funnel --bg 8765`.
 - **La séance se coupe dès le début** : `docker compose logs --tail 100` montre l'erreur ; envoie les dernières lignes.
@@ -91,7 +96,7 @@ Quand le dépôt change : retélécharge le ZIP, remplace le contenu du dossier 
 ```
 docker compose up -d --build
 ```
-Dernier changement à récupérer (29 oct.) : la saisie au clavier pendant une séance temps réel (commande `text` dans `server.py`). Sans cette mise à jour, le champ « Écrire au clavier » ne fait rien en mode temps réel ; il marche déjà en mode éco.
+Derniers changements à récupérer (29 oct.) : saisie au clavier en temps réel, mesure de la vitesse (RTF), voix de référence préparée une seule fois (plus rapide), phrases regroupées, interruption vérifiée par Whisper, filtre des phrases inventées par Whisper, réception d'une voix enregistrée depuis le téléphone (`POST /voices`), moteur Turbo en option. Il faut aussi reprendre le nouveau `docker-compose.yml` (dossier `voix` en écriture, nouveaux réglages) : garde ton `.env` et ton dossier `voix`.
 
 ## Au quotidien
 
