@@ -549,12 +549,33 @@ try {
     if (!(stats["/pc/live"] >= 1)) throw new Error(`pas de connexion WebSocket au PC : ${JSON.stringify(stats)}`);
     await noBlockingError();
   });
-  await step("Répète relit la dernière réplique (temps réel)", async () => {
+  await step("PC éteint → la séance temps réel bascule toute seule en mode éco", async () => {
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
+    await page.request.post(`${MOCK}/__pc`, { data: { down: true } });
+    try {
+      await startSession("fr", "Max");
+      await page.getByText(/continue en mode éco/).waitFor({ timeout: 25000 });
+      await page.waitForSelector(transcript, { timeout: 25000 });
+      const header = await page.locator("header").first().textContent();
+      if (!/éco/.test(header ?? "") || /temps réel/.test(header ?? "")) throw new Error(`en-tête : ${header}`);
+      await page.evaluate(() => {
+        window.__nextSpeech = "hier j'ai regardé un match";
+      });
+      await waitBubble("après le café", 25000);
+      await noBlockingError();
+      // L'échec de connexion WebSocket est attendu ici : ce n'est pas une erreur de l'app.
+      consoleErrors = consoleErrors.filter((e) => !/WebSocket/.test(e));
+    } finally {
+      await page.request.post(`${MOCK}/__pc`, { data: { down: false } });
+    }
+  });
+  await step("Répète relit la dernière réplique (mode éco de repli)", async () => {
     await page.getByRole("button", { name: /Répète/ }).click();
     await page.waitForTimeout(600);
     await noBlockingError();
   });
-  await step("Terminer la séance temps réel sans erreur", async () => {
+  await step("Terminer la séance de repli sans erreur", async () => {
     await page.getByRole("button", { name: "Terminer" }).click();
     await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
     if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));

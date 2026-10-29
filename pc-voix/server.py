@@ -445,10 +445,14 @@ class LiveSession:
                 message = await self.ws.receive()
                 if message.get("type") == "websocket.disconnect":
                     break
-                if message.get("bytes") is not None:
-                    self.on_audio(message["bytes"])
-                elif message.get("text"):
-                    await self.on_command(json.loads(message["text"]))
+                try:
+                    if message.get("bytes") is not None:
+                        self.on_audio(message["bytes"])
+                    elif message.get("text"):
+                        await self.on_command(json.loads(message["text"]))
+                except Exception:  # noqa: BLE001
+                    # Une trame ou une commande qui casse ne doit pas couper la séance.
+                    log.exception("Message ignoré (temps réel)")
         except WebSocketDisconnect:
             pass
         except Exception:  # noqa: BLE001
@@ -488,6 +492,8 @@ class LiveSession:
     # ---- oreille
     def on_audio(self, data: bytes):
         self.last_frame_at = time.time()
+        if len(data) % 2:
+            data = data[:-1]
         pcm = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         buf = np.concatenate([self.residual, pcm]) if self.residual.size else pcm
         n = buf.size // WINDOW
@@ -498,7 +504,7 @@ class LiveSession:
     def on_window(self, window: np.ndarray):
         import torch
 
-        prob = float(self.vad(torch.from_numpy(window), SR).item())
+        prob = float(self.vad(torch.from_numpy(np.ascontiguousarray(window)), SR).item())
         now = time.time()
         agent_speaking = now < self.speaking_until
         if not self.in_speech:
