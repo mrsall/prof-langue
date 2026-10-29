@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 
 // Playwright est préinstallé sur la machine de test (pas dans le projet) : on le charge par require.
 const require = createRequire(import.meta.url);
+const postgres = require("postgres");
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || "playwright");
 
 const BASE = (process.env.BASE_URL || "http://localhost:3300").replace(/\/+$/, "");
@@ -147,8 +148,15 @@ function presets(values) {
     .join(" ")} } catch {} })();`;
 }
 
-async function newPage(browser, storage) {
+const APP_PIN = process.env.APP_PIN || "2468";
+
+async function newPage(browser, storage, { login = true } = {}) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: "fr-FR" });
+  if (login) {
+    // Code d'accès : le cookie est posé sur le contexte (partagé par les pages et `page.request`).
+    const res = await context.request.post(`${BASE}/api/acces`, { data: { code: APP_PIN } });
+    if (!res.ok()) throw new Error(`connexion au code d'accès refusée : HTTP ${res.status()} ${(await res.text()).slice(0, 120)}`);
+  }
   await context.addInitScript(STUBS);
   await context.addInitScript(presets({ "prof-langue:show-text": "1", "prof-langue:talk-mode": "mains-libres", ...storage }));
   const p = await context.newPage();
@@ -700,7 +708,15 @@ try {
   });
   await page.context().close();
 
-} finally {
+  // ------------------------------------------------------------------ Code d'accès : 401 sans cookie, frein après 5 essais faux
+  page = await newPage(browser, {}, { login: false });
+  console.log("Code d'accès (APP_PIN) : protection et frein");
+  const cleanAttempts = async () => {
+    if (!process.env.DATABASE_URL) return;
+    const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+    try {
+      await sql`delete from acces_tentatives`;
+    } finally {
       await sql.end();
     }
   };
