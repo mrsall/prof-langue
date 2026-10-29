@@ -18,7 +18,7 @@ export function Suivi() {
 
   useEffect(() => {
     let active = true;
-    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } }, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
@@ -107,12 +107,8 @@ export function Suivi() {
           <section className="grid grid-cols-2 gap-2">
             <div className="flex flex-col gap-1 rounded-2xl border border-line bg-elevated p-4">
               <span className="text-xs text-muted">Niveau</span>
-              <span className="text-sm">
-                Anglais : <strong>{data.levels.en ?? "à tester"}</strong>
-              </span>
-              <span className="text-sm">
-                Français : <strong>{data.levels.fr ?? "à tester"}</strong>
-              </span>
+              <LevelLine label="Anglais" level={data.levels.en} observed={data.progression.find((p) => p.language === "en")?.level ?? null} />
+              <LevelLine label="Français" level={data.levels.fr} observed={data.progression.find((p) => p.language === "fr")?.level ?? null} />
               {data.progression.length > 0 && (
                 <p className="mt-1 text-[11px] leading-snug text-muted">
                   Vu en séance : {data.progression.slice(0, 6).map((p) => `${p.level} (${p.language.toUpperCase()}, ${p.day.slice(8, 10)}/${p.day.slice(5, 7)})`).join(" · ")}. Trois séances de suite au-dessus de ton niveau le font monter.
@@ -122,10 +118,10 @@ export function Suivi() {
             <Link href="/carnet" className="flex flex-col gap-1 rounded-2xl border border-line bg-elevated p-4">
               <span className="text-xs text-muted">Carnet</span>
               <span className="text-sm">
-                <strong>{data.words}</strong> mot{data.words > 1 ? "s" : ""}
+                Anglais : <strong>{data.wordsByLanguage.en.total}</strong> mot{data.wordsByLanguage.en.total > 1 ? "s" : ""} · <strong>{data.wordsByLanguage.en.due}</strong> à réviser aujourd&apos;hui
               </span>
               <span className="text-sm">
-                <strong>{data.dueWords}</strong> à réviser
+                Français : <strong>{data.wordsByLanguage.fr.total}</strong> mot{data.wordsByLanguage.fr.total > 1 ? "s" : ""} · <strong>{data.wordsByLanguage.fr.due}</strong> à réviser aujourd&apos;hui
               </span>
             </Link>
           </section>
@@ -242,5 +238,28 @@ export function QuotaLine({ quota, monthFcfa, source }: { quota: ElevenQuota | n
         Coût ce mois-ci : ≈ {monthFcfa} FCFA{source === "quota" ? " (d'après les vrais crédits)" : " (estimation par minute ; règle le prix de ton abonnement dans Réglages pour le vrai chiffre)"}.
       </p>
     </div>
+  );
+}
+
+/** « B1 (estimé en séance) — fais le test pour confirmer » tant que le test n'a pas été passé. */
+function LevelLine({ label, level, observed }: { label: string; level: string | null; observed: string | null }) {
+  if (level) {
+    return (
+      <span className="text-sm">
+        {label} : <strong>{level}</strong>
+      </span>
+    );
+  }
+  if (observed) {
+    return (
+      <span className="text-sm">
+        {label} : <strong>{observed}</strong> <span className="text-xs text-muted">(estimé en séance — fais le test pour confirmer)</span>
+      </span>
+    );
+  }
+  return (
+    <span className="text-sm">
+      {label} : <strong>à tester</strong>
+    </span>
   );
 }

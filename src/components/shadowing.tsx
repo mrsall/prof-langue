@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PhrasesResponse, ShadowPhrase, SoundStat } from "@/app/api/prononciation/phrases/route";
 import type { PronunciationResponse, PronunciationStatus } from "@/app/api/prononciation/route";
 import type { WordScore } from "@/lib/pronunciation";
@@ -148,10 +148,41 @@ export function Shadowing() {
     return audioRef.current;
   }
 
+  /** Garde-fou de l'écoute : quoi qu'il arrive (lecture refusée, onglet en arrière-plan, écran verrouillé), le bouton revient à « Écouter » au bout de 10 s. */
+  const playWatchdog = useRef<number | null>(null);
+  const backToIdle = useCallback(() => {
+    if (playWatchdog.current) {
+      clearTimeout(playWatchdog.current);
+      playWatchdog.current = null;
+    }
+    setPhase((s) => (s === "playing" ? "idle" : s));
+  }, []);
+  const armWatchdog = useCallback(() => {
+    if (playWatchdog.current) clearTimeout(playWatchdog.current);
+    playWatchdog.current = window.setTimeout(backToIdle, 10000);
+  }, [backToIdle]);
+
+  useEffect(() => {
+    // Passage en arrière-plan (autre app, écran verrouillé) : on arrête la lecture et on remet le bouton.
+    const onHide = () => {
+      if (document.visibilityState !== "hidden") return;
+      audioRef.current?.pause();
+      speakRef.current?.cancel();
+      speakRef.current = null;
+      backToIdle();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => document.removeEventListener("visibilitychange", onHide);
+  }, [backToIdle]);
+
   function stopPlayback() {
     audioRef.current?.pause();
     speakRef.current?.cancel();
     speakRef.current = null;
+    if (playWatchdog.current) {
+      clearTimeout(playWatchdog.current);
+      playWatchdog.current = null;
+    }
   }
 
   function playWithPhone(text: string, speed: number) {
@@ -165,7 +196,7 @@ export function Shadowing() {
     handle.done.catch(() => undefined).finally(() => {
       if (speakRef.current === handle) {
         speakRef.current = null;
-        setPhase((s) => (s === "playing" ? "idle" : s));
+        backToIdle();
       }
     });
   }
@@ -173,6 +204,7 @@ export function Shadowing() {
   function setStatusPlaying() {
     setError(null);
     setPhase("playing");
+    armWatchdog();
   }
 
   async function playWithKokoro(text: string, speed: number) {
@@ -192,13 +224,15 @@ export function Shadowing() {
       audio.src = url;
       audio.onended = () => {
         URL.revokeObjectURL(url);
-        setPhase((s) => (s === "playing" ? "idle" : s));
+        backToIdle();
       };
-      audio.onerror = () => setPhase((s) => (s === "playing" ? "idle" : s));
+      audio.onerror = backToIdle;
+      audio.onpause = backToIdle;
+      audio.onplaying = armWatchdog;
       await audio.play();
     } catch (e) {
       setKokoroNote(null);
-      setPhase((s) => (s === "playing" ? "idle" : s));
+      backToIdle();
       setError(`Kokoro indisponible (${e instanceof Error ? e.message : "erreur"}). Choisis une autre voix.`);
     }
   }
@@ -226,19 +260,25 @@ export function Shadowing() {
     } catch {
       // navigateur sans réglage
     }
-    audio.onended = () => setPhase((s) => (s === "playing" ? "idle" : s));
+    audio.onended = backToIdle;
+    // Une pause (arrêt, écran verrouillé, autre lecture) remet le bouton ; le garde-fou repart quand le son démarre vraiment.
+    audio.onpause = backToIdle;
+    audio.onplaying = armWatchdog;
     audio.onerror = () => {
       // La voix naturelle n'a pas pu être chargée : on lit avec la voix du téléphone.
       if (canSpeakPhone) playWithPhone(text, speed);
       else {
-        setPhase((s) => (s === "playing" ? "idle" : s));
+        backToIdle();
         setError("Impossible de lire la voix. Vérifie la connexion.");
       }
     };
     setStatusPlaying();
-    void audio.play().catch(() => {
+    void audio.play().catch((e: unknown) => {
       if (canSpeakPhone) playWithPhone(text, speed);
-      else setPhase("idle");
+      else {
+        backToIdle();
+        setError(`Lecture refusée par le téléphone${e instanceof Error && e.name === "NotAllowedError" ? " : appuie de nouveau sur Écouter" : ""}.`);
+      }
     });
   }
 

@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage, withTimeout } from "@/lib/db";
 import { getCostSettings, getLevel } from "@/lib/settings";
 import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
+import { streakFromDays } from "@/lib/streak";
 
 export const maxDuration = 30;
 
@@ -17,6 +18,8 @@ export type SuiviData = {
   totalMinutes: number;
   words: number;
   dueWords: number;
+  /** Total et « à réviser aujourd'hui » par langue (même requête que le carnet). */
+  wordsByLanguage: { en: { total: number; due: number }; fr: { total: number; due: number } };
   levels: { en: string | null; fr: string | null };
   /** Courbe de progression : niveau observé à chaque séance comptée (plus récent d'abord). */
   progression: { day: string; language: string; level: string }[];
@@ -38,6 +41,7 @@ export async function GET() {
     totalMinutes: 0,
     words: 0,
     dueWords: 0,
+    wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } },
     levels: { en: null, fr: null },
     progression: [],
     byMode: [],
@@ -50,15 +54,16 @@ export async function GET() {
   try {
     const sql = (await withTimeout(db(), 16000))!;
     const quotaJob = process.env.ELEVENLABS_API_KEY ? elevenQuota().catch(() => null) : Promise.resolve(null);
-    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression, cost] = await withTimeout(Promise.all([
+    const [weeks, days, totals, words, , byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression, cost] = await withTimeout(Promise.all([
       sql<{ start: string; seconds: number }[]>`select to_char(date_trunc('week', started_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
       sql<{ day: string }[]>`select distinct to_char((started_at at time zone 'Africa/Dakar')::date, 'YYYY-MM-DD') as day
-        from sessions where seconds >= 30 order by 1 desc limit 400`,
+        from sessions where seconds >= 30 order by 1 desc limit 400`, // même règle que src/lib/streak.ts (dayStats)
       sql<{ n: number; seconds: number }[]>`select count(*)::int as n, coalesce(sum(seconds), 0)::int as seconds from sessions`,
-      sql<{ n: number }[]>`select count(*)::int as n from words`,
-      sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
+      sql<{ language: string; total: number; due: number }[]>`select language, count(*)::int as total,
+        count(*) filter (where due_at <= now())::int as due from words group by language`,
+      Promise.resolve(null),
       sql<{ personality: string; seconds: number }[]>`select personality, sum(seconds)::int as seconds from sessions group by 1 order by 2 desc`,
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
@@ -83,8 +88,12 @@ export async function GET() {
       streak: streakFromDays(days.map((d) => d.day)),
       totalSessions: totals[0]?.n ?? 0,
       totalMinutes: Math.round((totals[0]?.seconds ?? 0) / 60),
-      words: words[0]?.n ?? 0,
-      dueWords: due[0]?.n ?? 0,
+      words: words.reduce((n, w) => n + w.total, 0),
+      dueWords: words.reduce((n, w) => n + w.due, 0),
+      wordsByLanguage: {
+        en: { total: words.find((w) => w.language === "en")?.total ?? 0, due: words.find((w) => w.language === "en")?.due ?? 0 },
+        fr: { total: words.find((w) => w.language === "fr")?.total ?? 0, due: words.find((w) => w.language === "fr")?.due ?? 0 },
+      },
       levels: { en: en?.level ?? null, fr: fr?.level ?? null },
       progression,
       byMode: byMode.map((m) => ({ personality: m.personality, minutes: Math.round(m.seconds / 60) })),
@@ -101,20 +110,4 @@ export async function GET() {
   } catch (error) {
     return Response.json({ ...empty, error: dbErrorMessage(error) }, { status: 502 });
   }
-}
-
-/** Jours consécutifs avec une séance, en comptant aujourd'hui ou hier comme point de départ. */
-function streakFromDays(days: string[]) {
-  if (days.length === 0) return 0;
-  const set = new Set(days);
-  const today = new Date();
-  const key = (d: Date) => d.toISOString().slice(0, 10);
-  const cursor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  if (!set.has(key(cursor))) cursor.setUTCDate(cursor.getUTCDate() - 1);
-  let streak = 0;
-  while (set.has(key(cursor))) {
-    streak += 1;
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
-  }
-  return streak;
 }

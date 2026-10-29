@@ -4,6 +4,7 @@ export const maxDuration = 30;
 import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, SCHEMA_SQL, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
 import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
+import { dayStats } from "@/lib/streak";
 import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
 import { geminiAvailable } from "@/lib/gemini";
 import { groqAvailable } from "@/lib/groq-stt";
@@ -20,10 +21,16 @@ export type ReglagesState = {
   dbInfo: { user: string; host: string; port: string; pooler: boolean; passwordPlaceholder: boolean } | null;
   levels: { en: { level: string; date: string } | null; fr: { level: string; date: string } | null };
   cost: CostSettings;
+  /** Minutes ElevenLabs du jour (plafond de dépense). */
   todayMinutes: number;
+  /** Minutes de toutes les séances du jour, tout moteur (objectif du jour). */
+  todayAllMinutes: number;
   monthFcfa: number;
   reminder: { enabled: boolean; hour: number; subscribed: boolean };
+  /** Mots à réviser aujourd'hui, toutes langues. */
   dueWords: number;
+  /** Mots à réviser aujourd'hui, par langue (l'accueil affiche celle choisie). */
+  dueByLanguage: { en: number; fr: number };
   pinEnabled: boolean;
   /** Série de jours calculée sur la base (null sans base). */
   streak: number | null;
@@ -52,9 +59,11 @@ export async function GET() {
     levels: { en: null, fr: null },
     cost: DEFAULT_COST,
     todayMinutes: 0,
+    todayAllMinutes: 0,
     monthFcfa: 0,
     reminder: { enabled: false, hour: 18, subscribed: false },
     dueWords: 0,
+    dueByLanguage: { en: 0, fr: 0 },
     pinEnabled: Boolean(process.env.APP_PIN),
     streak: null,
     pronunciation: { configured: pronunciationAvailable(), region: process.env.AZURE_SPEECH_REGION?.trim().toLowerCase() || null, locales: { en: localeFor("en"), fr: localeFor("fr") } },
@@ -72,26 +81,24 @@ export async function GET() {
   }
   try {
     const sql = (await withTimeout(db(), 16000))!;
-    const [en, fr, cost, reminder, push, today, month, due, days] = await withTimeout(Promise.all([
+    const [en, fr, cost, reminder, push, day, month, due] = await withTimeout(Promise.all([
       getLevel("en"),
       getLevel("fr"),
       getCostSettings(),
       getReminder(),
       sql<{ value: unknown }[]>`select value from settings where key = 'push'`,
-      sql<{ seconds: number }[]>`select coalesce(sum(seconds), 0)::int as seconds from sessions
-        where engine <> 'eco' and (started_at at time zone 'Africa/Dakar')::date = (now() at time zone 'Africa/Dakar')::date`,
+      dayStats(sql),
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
-      sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
-      sql<{ day: string }[]>`select distinct to_char((started_at at time zone 'Africa/Dakar')::date, 'YYYY-MM-DD') as day
-        from sessions where seconds >= 30 order by 1 desc limit 400`,
+      sql<{ language: string; n: number }[]>`select language, count(*)::int as n from words where due_at <= now() group by language`,
     ]), 15000);
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
       fr: fr ? { level: fr.level, date: fr.date } : null,
     };
     state.cost = cost;
-    state.todayMinutes = Math.round((today[0]?.seconds ?? 0) / 60);
+    state.todayMinutes = day.todayMinutes;
+    state.todayAllMinutes = day.todayAllMinutes;
     state.monthFcfa = Math.round(month[0]?.fcfa ?? 0);
     state.elevenQuota = await quotaJob;
     const real = state.elevenQuota ? monthFcfaFromQuota(state.elevenQuota, cost.planFcfa) : null;
@@ -100,8 +107,12 @@ export async function GET() {
       state.monthFcfaSource = "quota";
     }
     state.reminder = { enabled: reminder.enabled, hour: reminder.hour, subscribed: push.length > 0 };
-    state.dueWords = due[0]?.n ?? 0;
-    state.streak = streakFromDays(days.map((d) => d.day));
+    state.dueByLanguage = {
+      en: due.find((d) => d.language === "en")?.n ?? 0,
+      fr: due.find((d) => d.language === "fr")?.n ?? 0,
+    };
+    state.dueWords = state.dueByLanguage.en + state.dueByLanguage.fr;
+    state.streak = day.streak;
   } catch (error) {
     state.dbError = dbErrorMessage(error);
     state.elevenQuota = await quotaJob;
@@ -141,22 +152,6 @@ export async function POST(request: Request) {
   } catch (error) {
     return Response.json({ error: dbErrorMessage(error) }, { status: 502 });
   }
-}
-
-/** Jours consécutifs avec une séance, aujourd'hui ou hier comme point de départ. */
-export function streakFromDays(days: string[]) {
-  if (days.length === 0) return 0;
-  const set = new Set(days);
-  const today = new Date();
-  const key = (d: Date) => d.toISOString().slice(0, 10);
-  const cursor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  if (!set.has(key(cursor))) cursor.setUTCDate(cursor.getUTCDate() - 1);
-  let streak = 0;
-  while (set.has(key(cursor))) {
-    streak += 1;
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
-  }
-  return streak;
 }
 
 function describeDatabaseUrl(raw: string | undefined): ReglagesState["dbInfo"] {

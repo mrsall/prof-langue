@@ -1,5 +1,6 @@
 "use client";
 
+import { stripVoiceTags } from "@/lib/text";
 import type { Language } from "@/config/personalities";
 import type { TranscriptLine } from "@/lib/prompt";
 import type { LiveSession } from "@/app/api/live/session/route";
@@ -336,12 +337,7 @@ export class LiveEngine {
         break;
       case "delta":
         this.draft += msg.text;
-        cb.onDraft?.(
-          this.draft
-            .replace(/<\/?voice[^>]*>/gi, "")
-            .replace(/\s+/g, " ")
-            .trim(),
-        );
+        cb.onDraft?.(stripVoiceTags(this.draft));
         break;
       case "speak":
         this.pendingSpeak = { text: msg.text, seq: msg.seq };

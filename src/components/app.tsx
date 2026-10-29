@@ -46,8 +46,9 @@ import {
 } from "@/config/correction";
 import { randomTopic } from "@/config/topics";
 import { usableForShadowing } from "@/config/shadowing";
-import { useLocalStorage } from "@/lib/use-local-storage";
+import { useLocalStorage, useMounted } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
+import { stripVoiceTags } from "@/lib/text";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
 import type { Progression } from "@/app/api/sessions/route";
@@ -195,6 +196,8 @@ function AppInner() {
     streak: number;
     minutesToday: number;
     goalReached: boolean;
+    /** Faux quand Cherif n'a pas parlé : rien n'est compté (ni minutes, ni série, ni bilan). */
+    counted: boolean;
   } | null>(null);
 
   const progress = useProgress();
@@ -272,10 +275,7 @@ function AppInner() {
   }, [refreshRemote]);
 
   const pushLine = useCallback((role: "user" | "agent", raw: string) => {
-    const text = raw
-      .replace(/<\/?voice[^>]*>/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = stripVoiceTags(raw);
     if (!text) return;
     setTranscript((prev) => {
       const next = [...prev, { id: prev.length, role, text }];
@@ -990,11 +990,20 @@ function AppInner() {
       agentTalkMs.current > 0 ? agentTalkMs.current : wordsOf("agent") * 380;
     const total = userMs + agentMs;
     const userShare = total > 0 ? Math.round((userMs / total) * 100) : 0;
-    const recorded =
-      seconds >= 30
+    // Avec une base, la série et les minutes font foi côté serveur (/api/sessions les renvoie) ;
+    // la mémoire du téléphone ne sert qu'en mode téléphone seul.
+    const hasDb = Boolean(remote?.db);
+    // Une séance où Cherif n'a pas parlé ne compte nulle part.
+    const counted = userTurns.current > 0;
+    const recorded = hasDb
+      ? {
+          streak: remote?.streak ?? 0,
+          minutesToday: remote?.todayAllMinutes ?? 0,
+        }
+      : counted && seconds >= 30
         ? progress.recordSession(seconds)
         : { streak: progress.streak, minutesToday: progress.minutesToday };
-    if (p && seconds >= 30) {
+    if (p && counted && seconds >= 30) {
       history.add({
         date: new Date().toLocaleDateString("fr-FR", {
           day: "numeric",
@@ -1017,6 +1026,7 @@ function AppInner() {
       streak: recorded.streak,
       minutesToday: recorded.minutesToday,
       goalReached: recorded.minutesToday >= progress.goalMinutes,
+      counted,
     });
     setPhase("bilan");
 
@@ -1024,7 +1034,7 @@ function AppInner() {
     const plain = lines.map((l) => ({ role: l.role, text: l.text }));
     let result: BilanResult | null = null;
     let level: (LevelInfo & { error?: string }) | null = null;
-    if (lines.length >= 2 && p) {
+    if (counted && lines.length >= 2 && p) {
       setBilanLoading(true);
       try {
         if (p.kind === "test") {
@@ -1069,7 +1079,7 @@ function AppInner() {
         setBilanLoading(false);
       }
     }
-    if (p && seconds >= 20) {
+    if (p && counted && seconds >= 20) {
       try {
         const res = await fetch("/api/sessions", {
           method: "POST",
@@ -1102,16 +1112,32 @@ function AppInner() {
           saved?: boolean;
           costFcfa?: number;
           progression?: Progression | null;
+          streak?: number | null;
+          todayAllMinutes?: number | null;
         };
         if (data.saved && typeof data.costFcfa === "number")
           setSavedCost(data.costFcfa);
         if (data.saved) setProgression(data.progression ?? null);
+        if (data.saved && typeof data.streak === "number") {
+          const streak = data.streak;
+          const minutesToday = data.todayAllMinutes ?? recorded.minutesToday;
+          setSummary((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  streak,
+                  minutesToday,
+                  goalReached: minutesToday >= progress.goalMinutes,
+                }
+              : prev,
+          );
+        }
       } catch {
         // la séance reste dans l'historique du téléphone
       }
       refreshRemote();
     }
-  }, [connected, status, endSession, progress, history, refreshRemote]);
+  }, [connected, status, endSession, progress, history, refreshRemote, remote]);
 
   useEffect(() => {
     finishRef.current = () => void finish();
@@ -1152,15 +1178,9 @@ function AppInner() {
           earChoice={earChoice}
           onEarChoiceChange={setSavedEarChoice}
           pcReady={Boolean(remote?.pc?.configured)}
-          streak={
-            remote?.db && remote.streak != null
-              ? Math.max(remote.streak, progress.streak)
-              : progress.streak
-          }
+          streak={remote?.db ? (remote.streak ?? 0) : progress.streak}
           minutesToday={
-            remote?.db
-              ? Math.max(remote.todayMinutes, progress.minutesToday)
-              : progress.minutesToday
+            remote?.db ? remote.todayAllMinutes : progress.minutesToday
           }
           goalMinutes={progress.goalMinutes}
           onStart={() => setPhase("topic")}
@@ -1176,7 +1196,7 @@ function AppInner() {
               kind: "test",
             })
           }
-          dueWords={remote?.dueWords ?? 0}
+          dueWords={remote?.dueByLanguage?.[language] ?? 0}
           quota={remote?.elevenQuota ?? null}
           dbReady={Boolean(remote?.db)}
         />
@@ -1802,6 +1822,7 @@ function HomeScreen({
 }) {
   const today = useToday();
   const pc = usePcStatus(pcReady);
+  const mounted = useMounted();
   const dateLabel = today
     ? today.toLocaleDateString("fr-FR", {
         weekday: "long",
@@ -1809,10 +1830,32 @@ function HomeScreen({
         month: "long",
       })
     : "";
-  const greeting = personality.ownTopicMessages[language];
+  const greeting = stripVoiceTags(personality.ownTopicMessages[language]);
   const pct = Math.min(100, Math.round((minutesToday / goalMinutes) * 100));
   const displayName =
     personality.id === "situation" ? personality.modeLabel : personality.name;
+
+  if (!mounted) {
+    // Les choix enregistrés (langue, personnage, micro, vitesse) ne sont pas encore lus :
+    // un squelette plutôt que des sélecteurs par défaut qu'un appui rendrait caducs.
+    return (
+      <main
+        className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+        aria-busy="true"
+      >
+        <header className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Salut Cherif !</h1>
+        </header>
+        {[72, 56, 96, 320, 56, 56].map((h, i) => (
+          <div
+            key={i}
+            className="animate-pulse rounded-2xl border border-line bg-elevated"
+            style={{ height: h }}
+          />
+        ))}
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
@@ -1853,7 +1896,7 @@ function HomeScreen({
         <div className="h-2 overflow-hidden rounded-full bg-accent-soft">
           <div
             className="h-2 rounded-full bg-accent transition-all"
-            style={{ width: `${Math.max(4, pct)}%` }}
+            style={{ width: pct > 0 ? `${Math.max(4, pct)}%` : "0%" }}
           />
         </div>
       </section>
@@ -1890,7 +1933,8 @@ function HomeScreen({
             >
               <span className="flex flex-col">
                 <span className="text-sm font-semibold">
-                  {dueWords} mot{dueWords > 1 ? "s" : ""} à réviser
+                  {dueWords} mot{dueWords > 1 ? "s" : ""} à réviser ·{" "}
+                  {LANGUAGE_LABELS[language].toLowerCase()}
                 </span>
                 <span className="text-xs text-muted">
                   Deux minutes dans le carnet, ou une révision à la voix avec
@@ -2406,6 +2450,7 @@ function BilanScreen({
     streak: number;
     minutesToday: number;
     goalReached: boolean;
+    counted: boolean;
   } | null;
   bilan: BilanResult | null;
   loading: boolean;
@@ -2424,6 +2469,7 @@ function BilanScreen({
   const [showCorrected, setShowCorrected] = useState(false);
   const minutes = summary ? Math.round(summary.seconds / 60) : 0;
   const tooShort = !summary || summary.seconds < 30;
+  const notCounted = Boolean(summary && !summary.counted);
   const displayName =
     personality.id === "situation" ? "Ton partenaire" : personality.name;
   const fallbackEncouragement =
@@ -2434,7 +2480,9 @@ function BilanScreen({
       : tooShort
         ? "C'était rapide ! La prochaine fois, on discute un peu plus longtemps."
         : "Belle discussion, Cherif ! On remet ça demain ?";
-  const encouragement = bilan?.encouragement ?? fallbackEncouragement;
+  const encouragement = stripVoiceTags(
+    bilan?.encouragement ?? fallbackEncouragement,
+  );
   const showTeacher = Boolean(
     bilan?.suggestTeacher && bilan.teacherFocus && personality.id !== "prof",
   );
@@ -2471,12 +2519,16 @@ function BilanScreen({
         <h1 className="text-2xl font-bold">
           {kind === "test"
             ? "Test terminé"
-            : tooShort
-              ? "Séance éclair"
-              : "Bien joué, Cherif !"}
+            : notCounted
+              ? "Séance non comptée"
+              : tooShort
+                ? "Séance éclair"
+                : "Bien joué, Cherif !"}
         </h1>
         <p className="text-sm text-muted">
-          {summary?.goalReached
+          {notCounted
+            ? "Tu n'as pas parlé : cette séance n'est pas comptée (ni minutes, ni série, ni bilan)."
+            : summary?.goalReached
             ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
             : summary
               ? `${summary.minutesToday} min aujourd'hui sur 10. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
@@ -2539,7 +2591,7 @@ function BilanScreen({
         </section>
       )}
 
-      {kind !== "test" && (
+      {kind !== "test" && !notCounted && (
         <section className="flex items-center gap-3 rounded-2xl border border-line bg-elevated p-3">
           <PersonaAvatar
             style={personality.avatar}
@@ -2750,7 +2802,7 @@ function BilanScreen({
               ))}
             </section>
           )}
-          {kind !== "test" && (
+          {kind !== "test" && !notCounted && (
             <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold">Mots du jour</span>

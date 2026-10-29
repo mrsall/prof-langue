@@ -1,4 +1,5 @@
 import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
+import { dayStats } from "@/lib/streak";
 import { getCostSettings, getLevel, LEVELS, saveLevel } from "@/lib/settings";
 import { isLanguage, type Language } from "@/config/personalities";
 import type { Sql } from "postgres";
@@ -130,7 +131,9 @@ export async function POST(request: Request) {
     for (const e of errors.slice(0, 5)) {
       await sql`insert into errors (session_id, language, wrong, "right", tip) values (${sessionId}, ${language}, ${e.wrong}, ${e.right}, ${e.tip ?? ""})`;
     }
-    return Response.json({ saved: true, id: sessionId, costFcfa, wordsAdded: words.length, progression });
+    // Série et minutes du jour recalculées par la même fonction que l'accueil et le suivi (fuseau de Dakar).
+    const day = await dayStats(sql).catch(() => null);
+    return Response.json({ saved: true, id: sessionId, costFcfa, wordsAdded: words.length, progression, streak: day?.streak ?? null, todayAllMinutes: day?.todayAllMinutes ?? null });
   } catch (error) {
     return Response.json({ saved: false, error: dbErrorMessage(error) }, { status: 502 });
   }

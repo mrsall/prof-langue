@@ -387,6 +387,13 @@ try {
     await page.getByText(/Répéter \d+ phrase/).waitFor({ timeout: 10000 });
     await page.getByText(/Niveau observé aujourd/).waitFor({ timeout: 10000 });
   });
+  await step("Série de jours : le bilan, l'accueil (/api/reglages) et le suivi (/api/suivi) disent le même chiffre", async () => {
+    const reglages = await (await page.request.get(`${BASE}/api/reglages`)).json();
+    const suivi = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    if (!(reglages.streak >= 1)) throw new Error(`série serveur : ${reglages.streak} (une séance d'aujourd'hui existe)`);
+    if (suivi.streak !== reglages.streak) throw new Error(`suivi ${suivi.streak} ≠ accueil ${reglages.streak}`);
+    await page.waitForFunction((n) => new RegExp(`(Série : ${n} jour|Ta série est à ${n} jour)`).test(document.body.textContent || ""), reglages.streak, { timeout: 15000 });
+  });
   await step("Prononciation depuis le bilan : écoute, répétition notée, phrase suivante", async () => {
     await page.getByText(/Répéter \d+ phrase/).click();
     await page.waitForURL(/\/prononciation/, { timeout: 15000 });
@@ -648,6 +655,36 @@ try {
     const users = await countBubbles("mangé du riz");
     if (users !== 1) throw new Error(`prise de parole comptée ${users} fois`);
     await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Séance vide, compteurs de mots
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "phone", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Séance sans prise de parole, compteurs de mots");
+  await step("Terminer sans avoir parlé → « Séance non comptée », rien d'enregistré, pas de « Bien joué »", async () => {
+    const before = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/Séance non comptée/).waitFor({ timeout: 15000 });
+    const body = (await page.locator("main").textContent()) ?? "";
+    if (/Bien joué|Belle discussion|Nice chat/.test(body)) throw new Error("une séance vide est félicitée");
+    await page.waitForTimeout(1500);
+    const after = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    if (after.totalSessions !== before.totalSessions) throw new Error(`séance vide enregistrée : ${before.totalSessions} → ${after.totalSessions}`);
+    if (after.streak !== before.streak) throw new Error("la série a bougé sur une séance vide");
+  });
+  await step("Compteurs de mots : accueil (/api/reglages), carnet (/api/mots) et suivi (/api/suivi) sont d'accord, par langue", async () => {
+    const reglages = await (await page.request.get(`${BASE}/api/reglages`)).json();
+    const mots = await (await page.request.get(`${BASE}/api/mots`)).json();
+    const suivi = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    for (const lang of ["en", "fr"]) {
+      if (reglages.dueByLanguage[lang] !== mots.counts[lang].due) throw new Error(`${lang} à réviser : accueil ${reglages.dueByLanguage[lang]} ≠ carnet ${mots.counts[lang].due}`);
+      if (suivi.wordsByLanguage[lang].due !== mots.counts[lang].due || suivi.wordsByLanguage[lang].total !== mots.counts[lang].total) throw new Error(`${lang} : suivi ${JSON.stringify(suivi.wordsByLanguage[lang])} ≠ carnet ${JSON.stringify(mots.counts[lang])}`);
+    }
+    if (!(mots.counts.en.total + mots.counts.fr.total > 0)) throw new Error("aucun mot dans le carnet après les séances du banc");
+    await page.goto(`${BASE}/carnet`);
+    await page.getByText(/à réviser · anglais/).first().waitFor({ timeout: 15000 });
   });
   await page.context().close();
 

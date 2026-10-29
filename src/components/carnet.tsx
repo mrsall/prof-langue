@@ -12,7 +12,8 @@ import { LANGUAGE_LABELS, type Language } from "@/config/personalities";
  */
 const REVISION_STORAGE_KEY = "prof-langue:revision-words";
 
-type State = { db: boolean; due: WordRow[]; all: WordRow[]; error?: string };
+type Counts = { en: { total: number; due: number }; fr: { total: number; due: number } };
+type State = { db: boolean; due: WordRow[]; all: WordRow[]; counts?: Counts; error?: string };
 
 export function Carnet() {
   const [state, setState] = useState<State | null>(null);
@@ -48,6 +49,7 @@ export function Carnet() {
 
   const due = (state?.due ?? []).filter((w) => w.language === language);
   const all = (state?.all ?? []).filter((w) => w.language === language);
+  const total = state?.counts?.[language]?.total ?? all.length;
   const current = due[0];
 
   const answer = async (success: boolean) => {
@@ -117,7 +119,9 @@ export function Carnet() {
           <section className="flex flex-col gap-3 rounded-3xl border border-line bg-elevated p-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold">À réviser aujourd&apos;hui</h2>
-              <span className="text-xs text-muted">{due.length} restant{due.length > 1 ? "s" : ""}</span>
+              <span className="text-xs text-muted">
+                {due.length} à réviser · {LANGUAGE_LABELS[language].toLowerCase()}
+              </span>
             </div>
             {current ? (
               <>
@@ -165,7 +169,9 @@ export function Carnet() {
           <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold">Tout le carnet</h2>
-              <span className="text-xs text-muted">{all.length} mot{all.length > 1 ? "s" : ""}</span>
+              <span className="text-xs text-muted">
+                {total} mot{total > 1 ? "s" : ""} · {LANGUAGE_LABELS[language].toLowerCase()}
+              </span>
             </div>
             {all.length === 0 ? (
               <p className="text-sm text-muted">Les mots du jour de chaque séance arrivent ici automatiquement.</p>
