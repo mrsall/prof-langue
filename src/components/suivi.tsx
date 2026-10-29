@@ -3,6 +3,7 @@
 import { formatReset, type ElevenQuota } from "@/lib/quota-format";
 
 import Link from "next/link";
+import { TabBar } from "@/components/tab-bar";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SuiviData } from "@/app/api/suivi/route";
@@ -48,10 +49,10 @@ export function Suivi() {
   const pronWeeks = data ? fillWeeks(data.pron.weeks.map((w) => ({ start: w.start, minutes: w.score }))) : [];
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Suivi</h1>
-        <Link href="/" className="h-10 rounded-xl border border-line bg-elevated px-4 text-sm font-semibold leading-10">
+        <Link href="/" className="flex h-11 items-center rounded-xl border border-line bg-elevated px-4 text-sm font-semibold">
           Accueil
         </Link>
       </header>
@@ -185,6 +186,7 @@ export function Suivi() {
           <QuotaLine quota={data.elevenQuota} monthFcfa={data.monthFcfa} source={data.monthFcfaSource} />
         </>
       )}
+      <TabBar />
     </main>
   );
 }

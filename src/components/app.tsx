@@ -49,6 +49,7 @@ import { usableForShadowing } from "@/config/shadowing";
 import { useLocalStorage, useMounted } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
 import { stripVoiceTags } from "@/lib/text";
+import { TabBar } from "@/components/tab-bar";
 import { kokoroLoaded } from "@/lib/kokoro";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
@@ -1791,7 +1792,7 @@ function PcIndicator({
         <button
           type="button"
           onClick={onRetry}
-          className="shrink-0 font-semibold text-accent"
+          className="-my-2 flex min-h-11 shrink-0 items-center rounded-xl px-3 font-semibold text-accent"
         >
           Revérifier
         </button>
@@ -1874,7 +1875,7 @@ function HomeScreen({
     // un squelette plutôt que des sélecteurs par défaut qu'un appui rendrait caducs.
     return (
       <main
-        className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+        className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]"
         aria-busy="true"
       >
         <header className="flex items-center justify-between">
@@ -1892,7 +1893,7 @@ function HomeScreen({
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between">
         <div>
           <p className="text-sm text-muted first-letter:uppercase">
@@ -2200,23 +2201,12 @@ function HomeScreen({
         </svg>
         Commencer
       </button>
-      <nav
-        className="flex items-center justify-center gap-4 text-xs text-muted"
-        aria-label="Autres écrans"
-      >
-        <Link href="/carnet" className="underline">
-          Carnet{dueWords > 0 ? ` (${dueWords})` : ""}
-        </Link>
-        <Link href="/prononciation" className="underline">
-          Prononciation
-        </Link>
-        <Link href="/suivi" className="underline">
-          Suivi{level ? ` · ${level}` : ""}
-        </Link>
-        <Link href="/reglages" className="underline">
-          Réglages
-        </Link>
-      </nav>
+      <TabBar
+        badges={{
+          "/carnet": dueWords > 0 ? String(dueWords) : undefined,
+          "/suivi": level ?? undefined,
+        }}
+      />
     </main>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { TabBar } from "@/components/tab-bar";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WordRow } from "@/app/api/mots/route";
@@ -117,10 +118,10 @@ export function Carnet() {
   };
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Carnet de mots</h1>
-        <Link href="/" className="h-10 rounded-xl border border-line bg-elevated px-4 text-sm font-semibold leading-10">
+        <Link href="/" className="flex h-11 items-center rounded-xl border border-line bg-elevated px-4 text-sm font-semibold">
           Accueil
         </Link>
       </header>
@@ -268,6 +269,7 @@ export function Carnet() {
           </section>
         </>
       )}
+      <TabBar />
     </main>
   );
 }
