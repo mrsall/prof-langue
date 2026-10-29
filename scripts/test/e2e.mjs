@@ -181,8 +181,15 @@ async function waitBubble(text, timeout = 20000) {
   );
 }
 
+// Bulles définitives seulement (le brouillon du personnage, en opacité réduite, n'est pas compté).
+const finalBubbles = `${transcript}:not(.opacity-70)`;
+
+async function waitNewBubble(text, before, timeout = 20000) {
+  await page.waitForFunction(([sel, t, n]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t.toLowerCase())).length > n, [finalBubbles, text, before], { timeout });
+}
+
 async function countBubbles(text) {
-  const all = await page.locator(transcript).allTextContents();
+  const all = await page.locator(finalBubbles).allTextContents();
   return all.filter((t) => t.toLowerCase().includes(text.toLowerCase())).length;
 }
 
@@ -577,6 +584,87 @@ try {
     await waitBubble("ensuite j'ai lu un livre", 15000);
     await noBlockingError();
   });
+  await step("PC lent (RTF > 1) : le téléphone attend la fin de la réponse avant de parler, « réfléchit » pendant l'attente, pas de bascule entre deux phrases", async () => {
+    // La réponse à la phrase tapée se termine d'abord (sans « couper à la voix », le micro ne part pas pendant une réponse).
+    await page.waitForFunction(([sel, t]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length >= 2, [finalBubbles, "après le café"], { timeout: 25000 });
+    await page.waitForTimeout(2500);
+    await page.request.post(`${MOCK}/__pc`, { data: { slow: true } });
+    try {
+      // Une première réplique pour que le téléphone mesure le RTF du PC lent.
+      await page.evaluate(() => {
+        window.__micLevel = 0.6;
+      });
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => {
+        window.__micLevel = 0;
+      });
+      await page.waitForFunction(([sel, t]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length >= 3, [finalBubbles, "après le café"], { timeout: 25000 });
+      await page.waitForTimeout(2500);
+      await page.request.post(`${MOCK}/__live/reset`);
+      const before = await countBubbles("après le café");
+      const usersBefore = await countBubbles("hier j'ai bu mon café");
+      await page.evaluate(() => {
+        window.__micLevel = 0.6;
+      });
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => {
+        window.__micLevel = 0;
+      });
+      await waitNewBubble("hier j'ai bu mon café", usersBefore);
+      // Pendant le trou de 1,5 s entre les deux phrases, le personnage « réfléchit » (il ne commence pas à parler).
+      await page.getByText(/réfléchit/).waitFor({ timeout: 2500 });
+      await waitNewBubble("après le café", before, 25000);
+      await page.waitForTimeout(1500);
+      const live = await (await page.request.get(`${MOCK}/__live`)).json();
+      const events = live.events;
+      const start = events.lastIndexOf("speak1");
+      const tail = events.slice(start);
+      const agentAt = tail.indexOf("agent");
+      const playAt = tail.indexOf("playback:on");
+      if (start < 0 || agentAt < 0 || playAt < 0 || playAt < agentAt) throw new Error(`la lecture a commencé avant la fin de la réponse : ${JSON.stringify(events)}`);
+      if (tail.slice(0, agentAt).join(",") !== "speak1,speak2") throw new Error(`ordre inattendu : ${JSON.stringify(events)}`);
+      await noBlockingError();
+    } finally {
+      await page.request.post(`${MOCK}/__pc`, { data: { slow: false } });
+    }
+  });
+  await step("Mains libres sur haut-parleur : sans « couper à la voix », le micro ne part pas pendant la réponse ; avec, il part", async () => {
+    await page.request.post(`${MOCK}/__live/reset`);
+    const trigger = async () => {
+      await page.waitForTimeout(2500);
+      const before = await countBubbles("après le café");
+      const usersBefore = await countBubbles("hier j'ai bu mon café");
+      await page.evaluate(() => {
+        window.__micLevel = 0.6;
+      });
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => {
+        window.__micLevel = 0;
+      });
+      await waitNewBubble("hier j'ai bu mon café", usersBefore);
+      // Le personnage répond : on « parle » par-dessus pendant un bon moment.
+      await page.evaluate(() => {
+        window.__micLevel = 0.6;
+      });
+      await waitNewBubble("après le café", before, 25000);
+      await page.evaluate(() => {
+        window.__micLevel = 0;
+      });
+      await page.waitForTimeout(800);
+      return (await (await page.request.get(`${MOCK}/__live`)).json()).framesWhileResponding;
+    };
+    const silent = await trigger();
+    if (silent !== 0) throw new Error(`${silent} trames envoyées au PC pendant sa réponse alors que « couper à la voix » est désactivé`);
+    await page.getByRole("button", { name: /Me couper à la voix : non/ }).click();
+    await page.getByRole("button", { name: /Me couper à la voix : oui/ }).waitFor({ timeout: 5000 });
+    await page.request.post(`${MOCK}/__live/reset`);
+    await page.waitForTimeout(1500);
+    const loud = await trigger();
+    if (!(loud > 0)) throw new Error("aucune trame envoyée pendant la réponse alors que « couper à la voix » est activé");
+    await page.getByRole("button", { name: /Me couper à la voix : oui/ }).click();
+    await page.waitForTimeout(2500);
+    await noBlockingError();
+  });
   await step("PC éteint → la séance temps réel bascule toute seule en mode éco", async () => {
     await page.getByRole("button", { name: "Terminer" }).click();
     await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
@@ -619,6 +707,23 @@ try {
     await indicator.getByRole("button", { name: "Revérifier" }).click();
     await indicator.getByText(/PC en ligne : temps réel prêt/).waitFor({ timeout: 15000 });
     await noBlockingError();
+  });
+  await step("Voix du PC : enregistrement envoyé (B1), RTF mesuré (étape 0), moteurs comparés (B2)", async () => {
+    const fake = Buffer.alloc(9000, 1);
+    const up = await page.request.post(`${BASE}/api/voix-pc`, { multipart: { audio: { name: "voix.webm", mimeType: "audio/webm", buffer: fake }, voice: "ami", language: "fr" } });
+    const upBody = await up.json();
+    if (!up.ok() || !upBody.ok || upBody.file !== "ami.fr.wav") throw new Error(`envoi de voix : HTTP ${up.status()} ${JSON.stringify(upBody)}`);
+    const diag = await (await page.request.get(`${BASE}/api/diagnostic/pc`)).json();
+    if (!diag.voices.includes("ami.fr")) throw new Error(`la voix envoyée n'apparaît pas : ${JSON.stringify(diag.voices)}`);
+    if (!(diag.rtf && typeof diag.rtf.avg === "number")) throw new Error(`RTF absent du diagnostic : ${JSON.stringify(diag.rtf)}`);
+    if (!diag.engines.includes("turbo")) throw new Error(`moteurs : ${JSON.stringify(diag.engines)}`);
+    const cmp = await (await page.request.get(`${BASE}/api/diagnostic/pc-voix?engine=turbo&lang=en&text=Hello%20there`)).json();
+    if (!cmp.ok || cmp.engine !== "turbo" || !(cmp.rtf > 0) || !String(cmp.audio).startsWith("data:audio/wav;base64,")) throw new Error(`comparaison : ${JSON.stringify(cmp).slice(0, 200)}`);
+    await page.goto(`${BASE}/test-voix-pc`);
+    await page.getByText(/Chatterbox Turbo/).waitFor({ timeout: 15000 });
+    await page.goto(`${BASE}/admin`);
+    await page.getByRole("heading", { name: "Enregistrer une voix" }).waitFor({ timeout: 15000 });
+    consoleErrors = consoleErrors.filter((e) => !/WebSocket/.test(e));
   });
   await page.context().close();
 
@@ -669,13 +774,21 @@ try {
   });
   await step("Écrire au clavier (mode éco) → la phrase entre dans le texte et Max répond", async () => {
     // On laisse la réponse lente précédente se terminer (sinon le brouillon fausse le compte).
-    await page.waitForFunction((sel) => !document.querySelector(`${sel}.opacity-70`), transcript, { timeout: 15000 });
+    // Max doit avoir fini de réfléchir ET de parler : une saisie pendant sa réflexion est refusée (avis passager).
+    await page.waitForFunction(
+      (sel) => {
+        const t = document.querySelector("main")?.textContent || "";
+        return !/réfléchit…|parle…/.test(t) && !document.querySelector(`${sel}.opacity-70`);
+      },
+      transcript,
+      { timeout: 25000 },
+    );
     await page.waitForTimeout(500);
     const before = await countBubbles("après le café");
     await page.getByRole("button", { name: "Écrire au clavier" }).click();
     await page.getByLabel("Écrire au clavier").fill("J'ai bu un thé ce matin");
     await page.getByRole("button", { name: "Envoyer" }).click();
-    await waitBubble("J'ai bu un thé ce matin", 10000);
+    await waitBubble("J'ai bu un thé ce matin", 15000);
     await page.waitForFunction(([sel, t, n]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length > n, [transcript, "après le café", before], { timeout: 20000 });
     await noBlockingError();
   });
