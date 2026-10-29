@@ -1052,7 +1052,7 @@ function AppInner() {
       userShare,
       streak: recorded.streak,
       minutesToday: recorded.minutesToday,
-      goalReached: recorded.minutesToday >= progress.goalMinutes,
+      goalReached: recorded.minutesToday >= (remote?.goalMinutes ?? progress.goalMinutes),
       counted,
     });
     setPhase("bilan");
@@ -1155,7 +1155,8 @@ function AppInner() {
                   ...prev,
                   streak,
                   minutesToday,
-                  goalReached: minutesToday >= progress.goalMinutes,
+                  goalReached:
+                    minutesToday >= (remote?.goalMinutes ?? progress.goalMinutes),
                 }
               : prev,
           );
@@ -1215,7 +1216,7 @@ function AppInner() {
           minutesToday={
             remote?.db ? remote.todayAllMinutes : progress.minutesToday
           }
-          goalMinutes={progress.goalMinutes}
+          goalMinutes={remote?.goalMinutes ?? progress.goalMinutes}
           onStart={() => setPhase("topic")}
           level={currentLevel?.level ?? null}
           needsTest={needsTest}
@@ -1267,6 +1268,7 @@ function AppInner() {
         {capSheet}
         <BilanScreen
           summary={summary}
+          goalMinutes={remote?.goalMinutes ?? progress.goalMinutes}
           bilan={bilan}
           loading={bilanLoading}
           personality={live?.personality ?? personality}
@@ -2427,6 +2429,7 @@ function randomList(personalityId: string, language: Language) {
 
 function BilanScreen({
   summary,
+  goalMinutes,
   bilan,
   loading,
   personality,
@@ -2458,6 +2461,7 @@ function BilanScreen({
   levelResult: (LevelInfo & { error?: string }) | null;
   transcript: TranscriptLine[];
   costFcfa: number | null;
+  goalMinutes: number;
   progression: Progression | null;
   onAgain: () => void;
   onHome: () => void;
@@ -2529,7 +2533,7 @@ function BilanScreen({
             : summary?.goalReached
             ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
             : summary
-              ? `${summary.minutesToday} min aujourd'hui sur 10. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
+              ? `${summary.minutesToday} min aujourd'hui sur ${goalMinutes}. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
               : ""}
         </p>
       </header>

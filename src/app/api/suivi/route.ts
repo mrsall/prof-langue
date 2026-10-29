@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage, withTimeout } from "@/lib/db";
-import { getCostSettings, getLevel } from "@/lib/settings";
+import { getCostSettings, getGoalMinutes, getLevel } from "@/lib/settings";
 import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
 import { streakFromDays } from "@/lib/streak";
 
@@ -27,6 +27,7 @@ export type SuiviData = {
   monthFcfa: number;
   elevenQuota: ElevenQuota | null;
   monthFcfaSource: "quota" | "minutes";
+  goalMinutes: number;
   /** V4 : prononciation (vide tant qu'aucune phrase n'a été notée). */
   pron: { attempts: number; average: number | null; weeks: { start: string; score: number }[]; sounds: { language: string; phoneme: string; score: number; attempts: number }[] };
 };
@@ -48,13 +49,14 @@ export async function GET() {
     monthFcfa: 0,
     elevenQuota: null,
     monthFcfaSource: "minutes",
+    goalMinutes: 10,
     pron: { attempts: 0, average: null, weeks: [], sounds: [] },
   };
   if (!empty.db) return Response.json(empty);
   try {
     const sql = (await withTimeout(db(), 16000))!;
     const quotaJob = process.env.ELEVENLABS_API_KEY ? elevenQuota().catch(() => null) : Promise.resolve(null);
-    const [weeks, days, totals, words, , byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression, cost] = await withTimeout(Promise.all([
+    const [weeks, days, totals, words, , byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression, cost, goalMinutes] = await withTimeout(Promise.all([
       sql<{ start: string; seconds: number }[]>`select to_char(date_trunc('week', started_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
@@ -79,6 +81,7 @@ export async function GET() {
       sql<{ day: string; language: string; level: string }[]>`select to_char(started_at at time zone 'Africa/Dakar', 'YYYY-MM-DD') as day, language, observed_level as level
         from sessions where observed_level is not null and kind = 'conversation' and seconds >= 180 order by started_at desc limit 14`,
       getCostSettings(),
+      getGoalMinutes(),
     ]), 20000);
     const quota = await quotaJob;
     const realFcfa = quota ? monthFcfaFromQuota(quota, cost.planFcfa) : null;
@@ -100,6 +103,7 @@ export async function GET() {
       monthFcfa: realFcfa ?? Math.round(month[0]?.fcfa ?? 0),
       elevenQuota: quota,
       monthFcfaSource: realFcfa != null ? "quota" : "minutes",
+      goalMinutes,
       pron: {
         attempts: pronTotals[0]?.n ?? 0,
         average: pronTotals[0]?.avg ?? null,

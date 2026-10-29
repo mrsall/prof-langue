@@ -147,12 +147,12 @@ export function Carnet() {
         <p className="text-sm text-muted">Chargement…</p>
       ) : !state.db ? (
         <section className="rounded-2xl border border-line bg-elevated p-4 text-sm text-muted">
-          Le carnet a besoin de la base de données. Voir <Link href="/reglages" className="underline">Réglages</Link>.
+          Le carnet a besoin de la base de données. Voir <Link href="/admin" className="underline">Admin</Link>.
         </section>
       ) : state.error ? (
         <section className="flex flex-col gap-2 rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm">
           <p className="text-danger">{state.error}</p>
-          <Link href="/reglages#diagnostic" className="h-10 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
+          <Link href="/admin#diagnostic" className="h-10 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
             Lancer le diagnostic
           </Link>
         </section>

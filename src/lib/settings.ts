@@ -41,6 +41,13 @@ export async function getEnglishVariant(): Promise<EnglishVariant> {
   return isEnglishVariant(v) ? v : "us";
 }
 
+/** Objectif quotidien en minutes (tout mode confondu). 10 par défaut. */
+export const DEFAULT_GOAL_MINUTES = 10;
+export async function getGoalMinutes(): Promise<number> {
+  const g = Number(await getSetting<number>("goal_minutes", DEFAULT_GOAL_MINUTES));
+  return Number.isFinite(g) && g >= 1 && g <= 120 ? Math.round(g) : DEFAULT_GOAL_MINUTES;
+}
+
 export async function getReminder(): Promise<ReminderSettings> {
   const r = await getSetting<Partial<ReminderSettings>>("reminder", DEFAULT_REMINDER);
   return { ...DEFAULT_REMINDER, ...r };

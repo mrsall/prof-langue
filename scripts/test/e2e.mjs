@@ -421,10 +421,14 @@ try {
     await page.waitForTimeout(1500);
     if (await page.getByText(/La base de données ne répond pas/).count()) throw new Error("carnet : erreur de base");
     await page.goto(`${BASE}/reglages`);
+    await page.getByRole("radiogroup", { name: "Objectif quotidien" }).waitFor({ timeout: 20000 });
+    if (await page.getByText(/DATABASE_URL|SQL de secours|Tailscale/).count()) throw new Error("réglages : des détails techniques (hôte de la base, SQL, Tailscale) sont encore affichés");
+    await page.goto(`${BASE}/admin`);
     await page.getByText("Base de données").waitFor({ timeout: 20000 });
     await page.waitForTimeout(1500);
     const badge = await page.locator("section", { hasText: "Base de données" }).first().textContent();
-    if (process.env.DATABASE_URL && !/Prête/.test(badge ?? "")) throw new Error(`réglages : base pas « Prête » (${(badge ?? "").slice(0, 120)})`);
+    if (process.env.DATABASE_URL && !/Base OK/.test(badge ?? "")) throw new Error(`admin : base pas « OK » (${(badge ?? "").slice(0, 120)})`);
+    if (/utilisateur .* · hôte/.test(badge ?? "")) throw new Error("admin : l'hôte de la base est affiché");
   });
   await step("Aucune erreur JavaScript dans la page", async () => {
     if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));

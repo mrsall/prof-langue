@@ -18,7 +18,7 @@ export function Suivi() {
 
   useEffect(() => {
     let active = true;
-    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } }, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } }, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", goalMinutes: 10, pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
@@ -60,7 +60,7 @@ export function Suivi() {
         <p className="text-sm text-muted">Chargement…</p>
       ) : !data.db ? (
         <section className="rounded-2xl border border-line bg-elevated p-4 text-sm text-muted">
-          Le suivi a besoin de la base de données. Voir <Link href="/reglages" className="underline">Réglages</Link>.
+          Le suivi a besoin de la base de données. Voir <Link href="/admin" className="underline">Admin</Link>.
         </section>
       ) : (
         <>
@@ -78,7 +78,7 @@ export function Suivi() {
                 >
                   Réessayer
                 </button>
-                <Link href="/reglages#diagnostic" className="h-10 flex-1 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
+                <Link href="/admin#diagnostic" className="h-10 flex-1 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
                   Diagnostic
                 </Link>
               </div>
@@ -101,7 +101,7 @@ export function Suivi() {
                 </li>
               ))}
             </ul>
-            <p className="text-xs text-muted">Objectif : 10 minutes par jour, soit 70 par semaine.</p>
+            <p className="text-xs text-muted">Objectif : {data.goalMinutes} minutes par jour, soit {data.goalMinutes * 7} par semaine.</p>
           </section>
 
           <section className="grid grid-cols-2 gap-2">
