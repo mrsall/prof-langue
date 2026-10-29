@@ -143,7 +143,7 @@ export class LiveEngine {
           ws.close();
           done(false);
         }
-      }, 12000);
+      }, 8000);
       ws.onopen = () => {
         ws.send(
           JSON.stringify({

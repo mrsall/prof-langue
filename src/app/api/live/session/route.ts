@@ -4,7 +4,7 @@ import {
   SPOKEN_RULES,
   type SessionBody,
 } from "@/lib/session-prompt";
-import { pcAvailable, pcBaseUrl } from "@/lib/pc-tts";
+import { pcAvailable, pcBaseUrl, pcHealth, pcLikelyDown } from "@/lib/pc-tts";
 
 export const maxDuration = 30;
 
@@ -44,6 +44,14 @@ export async function POST(request: Request) {
     body = (await request.json()) as SessionBody;
   } catch {
     return Response.json({ error: "Requête invalide." }, { status: 400 });
+  }
+  // Le PC répond-il ? Sinon on le dit tout de suite (le téléphone repart en mode éco sans attendre).
+  if (pcLikelyDown()) return Response.json({ error: "PC injoignable (éteint, en veille, ou Docker/Tailscale arrêtés)." }, { status: 503 });
+  const health = await pcHealth(3000);
+  if (!health.ok) return Response.json({ error: health.error ?? "Le PC ne répond pas." }, { status: 503 });
+  if (health.live === false) {
+    const why = health.claude && !health.claude.ok ? (health.claude.error ?? "clé Anthropic") : "Whisper, VAD ou clé Anthropic manquants";
+    return Response.json({ error: `Le PC n'est pas prêt pour le temps réel (${why}).` }, { status: 503 });
   }
   const prepared = await prepareSession(body);
   if (!prepared)
