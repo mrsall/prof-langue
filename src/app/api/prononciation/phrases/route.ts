@@ -5,6 +5,7 @@ import { db, dbAvailable, withTimeout } from "@/lib/db";
 import { pronunciationAvailable } from "@/lib/pronunciation";
 import { sttAvailable } from "@/lib/stt";
 import { getLevel } from "@/lib/settings";
+import { sameEntry } from "@/lib/words-dedupe";
 
 export const maxDuration = 30;
 
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
     try {
       const sql = await withTimeout(db(), 6000);
       if (sql) {
-        const [sessions, failed, sounds, level] = await withTimeout(
+        const [sessions, failed, sounds, level, notebook] = await withTimeout(
           Promise.all([
             sql<{ transcript: { role: string; text: string }[] | null; corrections: { index: number; corrected: string }[] | null }[]>`
               select transcript, corrections from sessions
@@ -49,6 +50,11 @@ export async function GET(request: Request) {
               select phoneme, attempts, (score_sum / greatest(attempts, 1))::int as score from pron_sounds
               where language = ${language} and attempts >= 3 order by 3 asc limit 5`,
             getLevel(language),
+            // Les phrases du carnet (fiches de 4 mots et plus) : la phrase à prononcer est exactement celle du carnet.
+            sql<{ word: string; kind: string }[]>`
+              select word, kind from words
+              where language = ${language} and array_length(string_to_array(trim(word), ' '), 1) between 4 and 14
+              order by created_at desc limit 20`,
           ]),
           8000,
         );
@@ -57,10 +63,12 @@ export async function GET(request: Request) {
 
         const own: string[] = [];
         const theirs: string[] = [];
+        const fromNotebook = notebook.map((n) => usableForShadowing(n.word)).filter((t): t is string => t !== null);
         for (const s of sessions) {
           for (const c of s.corrections ?? []) {
             const t = usableForShadowing(c.corrected);
-            if (t) own.push(t);
+            // Une correction déjà dans le carnet (même à un mot près) : on garde la version du carnet.
+            if (t && !fromNotebook.some((n) => sameEntry(n, t))) own.push(t);
           }
           for (const line of s.transcript ?? []) {
             if (line.role !== "agent") continue;
@@ -68,7 +76,8 @@ export async function GET(request: Request) {
             if (t) theirs.push(t);
           }
         }
-        const seance = pickRandom([...new Set(own)], 2).map<ShadowPhrase>((text) => ({ text, from: "seance", note: "Ta phrase, corrigée" }));
+        const seance = pickRandom([...new Set(fromNotebook)], 2).map<ShadowPhrase>((text) => ({ text, from: "seance", note: "Du carnet" }));
+        if (seance.length < 2) seance.push(...pickRandom([...new Set(own)], 2 - seance.length).map<ShadowPhrase>((text) => ({ text, from: "seance", note: "Ta phrase, corrigée" })));
         if (seance.length < 3) {
           seance.push(...pickRandom([...new Set(theirs)].filter((t) => !own.includes(t)), 3 - seance.length).map<ShadowPhrase>((text) => ({ text, from: "seance", note: "Entendue en séance" })));
         }
