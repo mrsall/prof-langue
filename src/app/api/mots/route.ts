@@ -33,7 +33,14 @@ export async function GET(request: Request) {
       order by due_at asc, created_at desc limit 300`;
     const now = Date.now();
     const due = all.filter((w) => new Date(w.due_at).getTime() <= now);
-    return Response.json({ db: true, due, all });
+    // Compteurs exacts (la liste ci-dessus est plafonnée à 300 lignes).
+    const counted = await sql<{ language: string; total: number; due: number }[]>`select language, count(*)::int as total,
+      count(*) filter (where due_at <= now())::int as due from words group by language`;
+    const counts = {
+      en: { total: counted.find((c) => c.language === "en")?.total ?? 0, due: counted.find((c) => c.language === "en")?.due ?? 0 },
+      fr: { total: counted.find((c) => c.language === "fr")?.total ?? 0, due: counted.find((c) => c.language === "fr")?.due ?? 0 },
+    };
+    return Response.json({ db: true, due, all, counts });
   } catch (error) {
     return Response.json({ db: true, due: [], all: [], error: dbErrorMessage(error) }, { status: 502 });
   }

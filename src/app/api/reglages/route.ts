@@ -27,7 +27,10 @@ export type ReglagesState = {
   todayAllMinutes: number;
   monthFcfa: number;
   reminder: { enabled: boolean; hour: number; subscribed: boolean };
+  /** Mots à réviser aujourd'hui, toutes langues. */
   dueWords: number;
+  /** Mots à réviser aujourd'hui, par langue (l'accueil affiche celle choisie). */
+  dueByLanguage: { en: number; fr: number };
   pinEnabled: boolean;
   /** Série de jours calculée sur la base (null sans base). */
   streak: number | null;
@@ -60,6 +63,7 @@ export async function GET() {
     monthFcfa: 0,
     reminder: { enabled: false, hour: 18, subscribed: false },
     dueWords: 0,
+    dueByLanguage: { en: 0, fr: 0 },
     pinEnabled: Boolean(process.env.APP_PIN),
     streak: null,
     pronunciation: { configured: pronunciationAvailable(), region: process.env.AZURE_SPEECH_REGION?.trim().toLowerCase() || null, locales: { en: localeFor("en"), fr: localeFor("fr") } },
@@ -86,7 +90,7 @@ export async function GET() {
       dayStats(sql),
       sql<{ fcfa: number }[]>`select coalesce(sum(cost_fcfa), 0)::float as fcfa from sessions
         where date_trunc('month', started_at at time zone 'Africa/Dakar') = date_trunc('month', now() at time zone 'Africa/Dakar')`,
-      sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
+      sql<{ language: string; n: number }[]>`select language, count(*)::int as n from words where due_at <= now() group by language`,
     ]), 15000);
     state.levels = {
       en: en ? { level: en.level, date: en.date } : null,
@@ -103,7 +107,11 @@ export async function GET() {
       state.monthFcfaSource = "quota";
     }
     state.reminder = { enabled: reminder.enabled, hour: reminder.hour, subscribed: push.length > 0 };
-    state.dueWords = due[0]?.n ?? 0;
+    state.dueByLanguage = {
+      en: due.find((d) => d.language === "en")?.n ?? 0,
+      fr: due.find((d) => d.language === "fr")?.n ?? 0,
+    };
+    state.dueWords = state.dueByLanguage.en + state.dueByLanguage.fr;
     state.streak = day.streak;
   } catch (error) {
     state.dbError = dbErrorMessage(error);

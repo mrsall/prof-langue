@@ -18,7 +18,7 @@ export function Suivi() {
 
   useEffect(() => {
     let active = true;
-    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } }, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
@@ -118,10 +118,10 @@ export function Suivi() {
             <Link href="/carnet" className="flex flex-col gap-1 rounded-2xl border border-line bg-elevated p-4">
               <span className="text-xs text-muted">Carnet</span>
               <span className="text-sm">
-                <strong>{data.words}</strong> mot{data.words > 1 ? "s" : ""}
+                Anglais : <strong>{data.wordsByLanguage.en.total}</strong> mot{data.wordsByLanguage.en.total > 1 ? "s" : ""} · <strong>{data.wordsByLanguage.en.due}</strong> à réviser aujourd&apos;hui
               </span>
               <span className="text-sm">
-                <strong>{data.dueWords}</strong> à réviser
+                Français : <strong>{data.wordsByLanguage.fr.total}</strong> mot{data.wordsByLanguage.fr.total > 1 ? "s" : ""} · <strong>{data.wordsByLanguage.fr.due}</strong> à réviser aujourd&apos;hui
               </span>
             </Link>
           </section>

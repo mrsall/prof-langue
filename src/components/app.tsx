@@ -1191,7 +1191,7 @@ function AppInner() {
               kind: "test",
             })
           }
-          dueWords={remote?.dueWords ?? 0}
+          dueWords={remote?.dueByLanguage?.[language] ?? 0}
           quota={remote?.elevenQuota ?? null}
           dbReady={Boolean(remote?.db)}
         />
@@ -1928,7 +1928,8 @@ function HomeScreen({
             >
               <span className="flex flex-col">
                 <span className="text-sm font-semibold">
-                  {dueWords} mot{dueWords > 1 ? "s" : ""} à réviser
+                  {dueWords} mot{dueWords > 1 ? "s" : ""} à réviser ·{" "}
+                  {LANGUAGE_LABELS[language].toLowerCase()}
                 </span>
                 <span className="text-xs text-muted">
                   Deux minutes dans le carnet, ou une révision à la voix avec
