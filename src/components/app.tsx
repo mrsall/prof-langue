@@ -1622,6 +1622,109 @@ function ToolButton({
   );
 }
 
+type PcStatus =
+  | { state: "checking" }
+  | { state: "online"; live: boolean; claudeOk: boolean | null }
+  | { state: "offline"; error: string | null };
+
+/**
+ * Voyant du PC de Cherif sur l'accueil : un ping de 3 s au chargement, et un bouton
+ * « Revérifier » qui force la question même si le PC vient d'échouer (disjoncteur serveur).
+ * Évite d'ouvrir PowerShell pour savoir si Docker tourne.
+ */
+function usePcStatus(enabled: boolean) {
+  const [status, setStatus] = useState<PcStatus>({ state: "checking" });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    fetch(`/api/pc/ping${tick > 0 ? "?force=1" : ""}`)
+      .then(
+        (r) =>
+          r.json() as Promise<{
+            ok: boolean;
+            live?: boolean;
+            claudeOk?: boolean | null;
+            error?: string | null;
+          }>,
+      )
+      .then((ping) => {
+        if (cancelled) return;
+        setStatus(
+          ping.ok
+            ? {
+                state: "online",
+                live: Boolean(ping.live),
+                claudeOk: ping.claudeOk ?? null,
+              }
+            : { state: "offline", error: ping.error ?? null },
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setStatus({ state: "offline", error: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, tick]);
+  const retry = useCallback(() => {
+    setStatus({ state: "checking" });
+    setTick((t) => t + 1);
+  }, []);
+  return { status, retry };
+}
+
+function PcIndicator({
+  status,
+  onRetry,
+}: {
+  status: PcStatus;
+  onRetry: () => void;
+}) {
+  const online = status.state === "online";
+  const ready = online && status.live;
+  const dot =
+    status.state === "checking"
+      ? "bg-muted animate-pulse"
+      : ready
+        ? "bg-speaking"
+        : online
+          ? "bg-listening"
+          : "bg-danger";
+  const text =
+    status.state === "checking"
+      ? "PC : vérification…"
+      : ready
+        ? "PC en ligne : temps réel prêt."
+        : online
+          ? status.claudeOk === false
+            ? "PC en ligne, mais la clé Anthropic est refusée : corrige ANTHROPIC_API_KEY dans pc-voix/.env puis relance Docker."
+            : "PC en ligne, mais le temps réel n'est pas prêt (Whisper ou clé Claude) : regarde la carte « Voix de mon PC » dans Réglages."
+          : "PC hors ligne : lance Docker Desktop, puis « docker compose up -d » dans pc-voix. En attendant, le temps réel repasse en mode éco.";
+  return (
+    <div
+      className="flex items-start gap-2 rounded-2xl border border-line bg-elevated px-4 py-3 text-sm"
+      role="status"
+      aria-live="polite"
+    >
+      <span
+        className={`mt-1.5 inline-block size-2.5 shrink-0 rounded-full ${dot}`}
+        aria-hidden
+      />
+      <span className="flex-1 text-muted">{text}</span>
+      {status.state !== "checking" && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 font-semibold text-accent"
+        >
+          Revérifier
+        </button>
+      )}
+    </div>
+  );
+}
+
 function HomeScreen({
   language,
   onLanguageChange,
@@ -1675,6 +1778,7 @@ function HomeScreen({
   dbReady: boolean;
 }) {
   const today = useToday();
+  const pc = usePcStatus(pcReady);
   const dateLabel = today
     ? today.toLocaleDateString("fr-FR", {
         weekday: "long",
@@ -1844,6 +1948,7 @@ function HomeScreen({
         </p>
       </section>
 
+      {pcReady && <PcIndicator status={pc.status} onRetry={pc.retry} />}
       <details className="rounded-2xl border border-line bg-elevated px-4 py-3">
         <summary className="cursor-pointer text-sm font-semibold">
           Micro et vitesse{" "}

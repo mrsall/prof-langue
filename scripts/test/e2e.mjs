@@ -554,6 +554,9 @@ try {
     await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
     await page.request.post(`${MOCK}/__pc`, { data: { down: true } });
     try {
+      // Le voyant de l'accueil doit le dire tout de suite, sans PowerShell.
+      await page.goto(`${BASE}/`);
+      await page.getByText(/PC hors ligne/).waitFor({ timeout: 15000 });
       await startSession("fr", "Max");
       await page.getByText(/continue en mode éco/).waitFor({ timeout: 25000 });
       await page.waitForSelector(transcript, { timeout: 25000 });
@@ -579,6 +582,15 @@ try {
     await page.getByRole("button", { name: "Terminer" }).click();
     await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
     if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));
+  });
+  await step("Voyant PC : « Revérifier » force la question malgré le disjoncteur → PC en ligne, temps réel prêt", async () => {
+    await page.goto(`${BASE}/`);
+    const indicator = page.getByRole("status").filter({ hasText: /^PC/ });
+    await indicator.getByText(/PC hors ligne|PC en ligne/).waitFor({ timeout: 15000 });
+    // Le serveur tient le PC pour éteint pendant 60 s après la panne simulée : le bouton doit passer outre.
+    await indicator.getByRole("button", { name: "Revérifier" }).click();
+    await indicator.getByText(/PC en ligne : temps réel prêt/).waitFor({ timeout: 15000 });
+    await noBlockingError();
   });
   await page.context().close();
 

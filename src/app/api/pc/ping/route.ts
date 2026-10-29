@@ -8,10 +8,18 @@ export const maxDuration = 15;
  * pour choisir tout de suite une voix et une oreille de repli si le PC est éteint,
  * au lieu d'attendre un délai à chaque phrase.
  */
-export async function GET() {
+export async function GET(req: Request) {
   await connection();
   if (!pcAvailable()) return Response.json({ ok: false, configured: false, error: "PC non configuré." });
-  if (pcLikelyDown()) return Response.json({ ok: false, configured: true, error: "PC marqué injoignable il y a moins d'une minute." });
+  // `?force=1` (bouton « Revérifier » de l'accueil) interroge le PC même s'il vient d'échouer.
+  const force = new URL(req.url).searchParams.get("force") === "1";
+  if (!force && pcLikelyDown()) return Response.json({ ok: false, configured: true, error: "PC marqué injoignable il y a moins d'une minute." });
   const health = await pcHealth(3000);
-  return Response.json({ ok: Boolean(health.ok), configured: true, live: Boolean(health.live), error: health.ok ? null : (health.error ?? "Le PC ne répond pas.") });
+  return Response.json({
+    ok: Boolean(health.ok),
+    configured: true,
+    live: Boolean(health.live),
+    claudeOk: health.claude ? Boolean(health.claude.ok) : null,
+    error: health.ok ? null : (health.error ?? "Le PC ne répond pas."),
+  });
 }
