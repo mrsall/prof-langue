@@ -174,6 +174,7 @@ const SCHEMA_STATEMENTS = [
   primary key (language, phoneme)
 )`,
   `alter table sessions add column if not exists engine text not null default 'elevenlabs'`,
+  `alter table words add column if not exists kind text not null default 'mot'`,
   `create table if not exists acces_tentatives (
   id bigserial primary key,
   ip text not null,
@@ -204,6 +205,7 @@ export async function schemaComplete(sql: Sql) {
     and to_regclass('public.pron_attempts') is not null
     and to_regclass('public.pron_sounds') is not null
     and to_regclass('public.acces_tentatives') is not null
+    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'words' and column_name = 'kind')
     and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'engine')
     and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'sessions' and column_name = 'observed_level') as ok`;
   return Boolean(row?.ok);

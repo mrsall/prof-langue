@@ -1100,7 +1100,8 @@ function AppInner() {
               ...(result?.words ?? []),
               ...(result?.upgrades ?? []).map((u) => ({
                 en: u.better,
-                fr: `plutôt que « ${u.used} »`,
+                fr: `${u.why ? `${u.why} ` : "Plus naturel "}(plutôt que « ${u.used} »)`,
+                kind: "plus-naturel",
               })),
             ],
             encouragement: result?.encouragement ?? null,

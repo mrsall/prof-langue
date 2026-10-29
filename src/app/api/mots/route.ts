@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage } from "@/lib/db";
+import { sameEntry } from "@/lib/words-dedupe";
 
 export const maxDuration = 30;
 
@@ -19,6 +20,8 @@ export type WordRow = {
   stage: number;
   reviews: number;
   lapses: number;
+  /** "mot" ou "plus-naturel" (tournure plus polie / naturelle, pas une correction). */
+  kind: "mot" | "plus-naturel";
 };
 
 export async function GET(request: Request) {
@@ -28,7 +31,7 @@ export async function GET(request: Request) {
   const language = url.searchParams.get("language");
   try {
     const sql = (await db())!;
-    const all = await sql<WordRow[]>`select id, language, word, translation, created_at, due_at, stage, reviews, lapses
+    const all = await sql<WordRow[]>`select id, language, word, translation, created_at, due_at, stage, reviews, lapses, kind
       from words ${language ? sql`where language = ${language}` : sql``}
       order by due_at asc, created_at desc limit 300`;
     const now = Date.now();
@@ -46,7 +49,7 @@ export async function GET(request: Request) {
   }
 }
 
-type Body = { id?: number; success?: boolean; action?: "delete" | "add"; word?: string; translation?: string; language?: string };
+type Body = { id?: number; success?: boolean; action?: "delete" | "add" | "edit"; word?: string; translation?: string; language?: string };
 
 export async function POST(request: Request) {
   if (!dbAvailable()) return Response.json({ error: "Base de données non configurée." }, { status: 400 });
@@ -60,11 +63,19 @@ export async function POST(request: Request) {
     const sql = (await db())!;
     if (body.action === "add" && body.word?.trim()) {
       const language = body.language === "fr" ? "fr" : "en";
+      const existing = (await sql<{ word: string }[]>`select word from words where language = ${language} order by created_at desc limit 600`).map((r) => r.word);
+      if (existing.some((e) => sameEntry(e, body.word!))) return Response.json({ ok: true, duplicate: true });
       await sql`insert into words (language, word, translation) values (${language}, ${body.word.trim()}, ${(body.translation ?? "").trim()})
         on conflict (language, lower(word)) do update set translation = excluded.translation`;
       return Response.json({ ok: true });
     }
     if (typeof body.id !== "number") return Response.json({ error: "Mot inconnu." }, { status: 400 });
+    if (body.action === "edit") {
+      const word = (body.word ?? "").trim().slice(0, 200);
+      if (!word) return Response.json({ error: "Le mot ne peut pas être vide." }, { status: 400 });
+      await sql`update words set word = ${word}, translation = ${(body.translation ?? "").trim().slice(0, 300)} where id = ${body.id}`;
+      return Response.json({ ok: true });
+    }
     if (body.action === "delete") {
       await sql`delete from words where id = ${body.id}`;
       return Response.json({ ok: true });
