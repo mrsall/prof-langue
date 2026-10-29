@@ -33,9 +33,11 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // Sombre par défaut (comme le manifeste), clair seulement si le téléphone le demande.
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f6f7fb" },
     { media: "(prefers-color-scheme: dark)", color: "#0b0d17" },
+    { color: "#0b0d17" },
   ],
 };
 

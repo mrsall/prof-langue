@@ -1851,7 +1851,7 @@ function HomeScreen({
         <div className="h-2 overflow-hidden rounded-full bg-accent-soft">
           <div
             className="h-2 rounded-full bg-accent transition-all"
-            style={{ width: `${Math.max(4, pct)}%` }}
+            style={{ width: pct > 0 ? `${Math.max(4, pct)}%` : "0%" }}
           />
         </div>
       </section>
