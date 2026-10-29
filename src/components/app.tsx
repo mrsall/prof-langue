@@ -196,6 +196,8 @@ function AppInner() {
     streak: number;
     minutesToday: number;
     goalReached: boolean;
+    /** Faux quand Cherif n'a pas parlé : rien n'est compté (ni minutes, ni série, ni bilan). */
+    counted: boolean;
   } | null>(null);
 
   const progress = useProgress();
@@ -991,15 +993,17 @@ function AppInner() {
     // Avec une base, la série et les minutes font foi côté serveur (/api/sessions les renvoie) ;
     // la mémoire du téléphone ne sert qu'en mode téléphone seul.
     const hasDb = Boolean(remote?.db);
+    // Une séance où Cherif n'a pas parlé ne compte nulle part.
+    const counted = userTurns.current > 0;
     const recorded = hasDb
       ? {
           streak: remote?.streak ?? 0,
           minutesToday: remote?.todayAllMinutes ?? 0,
         }
-      : seconds >= 30
+      : counted && seconds >= 30
         ? progress.recordSession(seconds)
         : { streak: progress.streak, minutesToday: progress.minutesToday };
-    if (p && seconds >= 30) {
+    if (p && counted && seconds >= 30) {
       history.add({
         date: new Date().toLocaleDateString("fr-FR", {
           day: "numeric",
@@ -1022,6 +1026,7 @@ function AppInner() {
       streak: recorded.streak,
       minutesToday: recorded.minutesToday,
       goalReached: recorded.minutesToday >= progress.goalMinutes,
+      counted,
     });
     setPhase("bilan");
 
@@ -1029,7 +1034,7 @@ function AppInner() {
     const plain = lines.map((l) => ({ role: l.role, text: l.text }));
     let result: BilanResult | null = null;
     let level: (LevelInfo & { error?: string }) | null = null;
-    if (lines.length >= 2 && p) {
+    if (counted && lines.length >= 2 && p) {
       setBilanLoading(true);
       try {
         if (p.kind === "test") {
@@ -1074,7 +1079,7 @@ function AppInner() {
         setBilanLoading(false);
       }
     }
-    if (p && seconds >= 20) {
+    if (p && counted && seconds >= 20) {
       try {
         const res = await fetch("/api/sessions", {
           method: "POST",
@@ -2445,6 +2450,7 @@ function BilanScreen({
     streak: number;
     minutesToday: number;
     goalReached: boolean;
+    counted: boolean;
   } | null;
   bilan: BilanResult | null;
   loading: boolean;
@@ -2463,6 +2469,7 @@ function BilanScreen({
   const [showCorrected, setShowCorrected] = useState(false);
   const minutes = summary ? Math.round(summary.seconds / 60) : 0;
   const tooShort = !summary || summary.seconds < 30;
+  const notCounted = Boolean(summary && !summary.counted);
   const displayName =
     personality.id === "situation" ? "Ton partenaire" : personality.name;
   const fallbackEncouragement =
@@ -2512,12 +2519,16 @@ function BilanScreen({
         <h1 className="text-2xl font-bold">
           {kind === "test"
             ? "Test terminé"
-            : tooShort
-              ? "Séance éclair"
-              : "Bien joué, Cherif !"}
+            : notCounted
+              ? "Séance non comptée"
+              : tooShort
+                ? "Séance éclair"
+                : "Bien joué, Cherif !"}
         </h1>
         <p className="text-sm text-muted">
-          {summary?.goalReached
+          {notCounted
+            ? "Tu n'as pas parlé : cette séance n'est pas comptée (ni minutes, ni série, ni bilan)."
+            : summary?.goalReached
             ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
             : summary
               ? `${summary.minutesToday} min aujourd'hui sur 10. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
@@ -2580,7 +2591,7 @@ function BilanScreen({
         </section>
       )}
 
-      {kind !== "test" && (
+      {kind !== "test" && !notCounted && (
         <section className="flex items-center gap-3 rounded-2xl border border-line bg-elevated p-3">
           <PersonaAvatar
             style={personality.avatar}
@@ -2791,7 +2802,7 @@ function BilanScreen({
               ))}
             </section>
           )}
-          {kind !== "test" && (
+          {kind !== "test" && !notCounted && (
             <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold">Mots du jour</span>

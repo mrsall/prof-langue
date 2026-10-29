@@ -658,6 +658,36 @@ try {
   });
   await page.context().close();
 
+  // ------------------------------------------------------------------ Séance vide, compteurs de mots
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "phone", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Séance sans prise de parole, compteurs de mots");
+  await step("Terminer sans avoir parlé → « Séance non comptée », rien d'enregistré, pas de « Bien joué »", async () => {
+    const before = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/Séance non comptée/).waitFor({ timeout: 15000 });
+    const body = (await page.locator("main").textContent()) ?? "";
+    if (/Bien joué|Belle discussion|Nice chat/.test(body)) throw new Error("une séance vide est félicitée");
+    await page.waitForTimeout(1500);
+    const after = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    if (after.totalSessions !== before.totalSessions) throw new Error(`séance vide enregistrée : ${before.totalSessions} → ${after.totalSessions}`);
+    if (after.streak !== before.streak) throw new Error("la série a bougé sur une séance vide");
+  });
+  await step("Compteurs de mots : accueil (/api/reglages), carnet (/api/mots) et suivi (/api/suivi) sont d'accord, par langue", async () => {
+    const reglages = await (await page.request.get(`${BASE}/api/reglages`)).json();
+    const mots = await (await page.request.get(`${BASE}/api/mots`)).json();
+    const suivi = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    for (const lang of ["en", "fr"]) {
+      if (reglages.dueByLanguage[lang] !== mots.counts[lang].due) throw new Error(`${lang} à réviser : accueil ${reglages.dueByLanguage[lang]} ≠ carnet ${mots.counts[lang].due}`);
+      if (suivi.wordsByLanguage[lang].due !== mots.counts[lang].due || suivi.wordsByLanguage[lang].total !== mots.counts[lang].total) throw new Error(`${lang} : suivi ${JSON.stringify(suivi.wordsByLanguage[lang])} ≠ carnet ${JSON.stringify(mots.counts[lang])}`);
+    }
+    if (!(mots.counts.en.total + mots.counts.fr.total > 0)) throw new Error("aucun mot dans le carnet après les séances du banc");
+    await page.goto(`${BASE}/carnet`);
+    await page.getByText(/à réviser · anglais/).first().waitFor({ timeout: 15000 });
+  });
+  await page.context().close();
+
   // ------------------------------------------------------------------ Crédit ElevenLabs épuisé : chaîne de secours
   page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "eleven", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
   console.log("Crédit ElevenLabs épuisé (quota_exceeded simulé)");
