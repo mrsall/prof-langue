@@ -527,7 +527,12 @@ BARGE_PROB = 0.85
 BARGE_VERIFY_S = 1.0  # après ≈ 1 s de voix, on vérifie par Whisper avant de couper
 BARGE_MIN_WORDS = 2
 ECHO_MAX_SIMILARITY = 0.5  # texte trop proche de ce que le personnage vient de dire = écho de sa propre voix
-GROUP_CHARS = 120  # après la première phrase, on regroupe jusqu'à ≈ 120 caractères par morceau de voix
+# Après la première phrase, les suivantes sont regroupées en morceaux de taille SEMBLABLE à la première
+# (entre 60 et 160 caractères) : le morceau suivant se fabrique pendant que le précédent se lit, et le
+# téléphone n'a besoin que d'une petite réserve quand le RTF frôle 1. Un gros deuxième morceau après une
+# première phrase courte créerait un trou même avec une carte rapide.
+GROUP_MIN_CHARS = 60
+GROUP_MAX_CHARS = 160
 MAX_UTTERANCE_S = 45
 PARTIAL_EVERY_S = 1.0
 PAD_WINDOWS = 10  # ≈ 320 ms gardés avant le début détecté
@@ -943,6 +948,7 @@ class LiveSession:
         seq = 0
         first_sentence_at = None
         group: list[str] = []
+        target = GROUP_MIN_CHARS
         self.spoken_recent = []
 
         async def speak_group():
@@ -960,7 +966,9 @@ class LiveSession:
                 first_sentence_at = time.time()
             # La première phrase part seule (démarrage rapide) ; les suivantes sont regroupées (≈ 120 caractères)
             # pour que chaque morceau se fabrique pendant que le précédent se lit.
+            nonlocal target
             if seq == 0:
+                target = max(GROUP_MIN_CHARS, min(GROUP_MAX_CHARS, len(strip_voice_tags(sentence))))
                 group.append(sentence)
                 await speak_group()
                 return
@@ -968,7 +976,7 @@ class LiveSession:
             if group and (("<voice" in sentence) != ("<voice" in group[0])):
                 await speak_group()
             group.append(sentence)
-            if sum(len(g) for g in group) >= GROUP_CHARS:
+            if sum(len(strip_voice_tags(g)) for g in group) >= target:
                 await speak_group()
 
         try:
@@ -1037,8 +1045,9 @@ class LiveSession:
             self.spoken_recent = []
             sentences = SentenceBuffer().push(text + " ") or [text]
             pieces: list[str] = [sentences[0]]
+            target = max(GROUP_MIN_CHARS, min(GROUP_MAX_CHARS, len(strip_voice_tags(sentences[0]))))
             for sentence in sentences[1:]:
-                if len(pieces) > 1 and len(pieces[-1]) + len(sentence) < GROUP_CHARS:
+                if len(pieces) > 1 and len(pieces[-1]) + len(sentence) < target:
                     pieces[-1] = f"{pieces[-1]} {sentence}"
                 else:
                     pieces.append(sentence)
