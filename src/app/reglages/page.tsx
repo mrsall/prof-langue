@@ -1,7 +1,7 @@
-import { Settings } from "@/components/settings";
+import { SettingsV3 } from "@/components/settings-v3";
 
 export const metadata = { title: "Réglages · Prof de langues" };
 
 export default function ReglagesPage() {
-  return <Settings />;
+  return <SettingsV3 />;
 }

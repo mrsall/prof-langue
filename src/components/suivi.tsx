@@ -3,6 +3,7 @@
 import { formatReset, type ElevenQuota } from "@/lib/quota-format";
 
 import Link from "next/link";
+import { TabBar } from "@/components/tab-bar";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SuiviData } from "@/app/api/suivi/route";
@@ -18,7 +19,7 @@ export function Suivi() {
 
   useEffect(() => {
     let active = true;
-    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } }, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
+    const empty: SuiviData = { db: true, weeks: [], streak: 0, totalSessions: 0, totalMinutes: 0, words: 0, dueWords: 0, wordsByLanguage: { en: { total: 0, due: 0 }, fr: { total: 0, due: 0 } }, levels: { en: null, fr: null }, progression: [], byMode: [], monthFcfa: 0, elevenQuota: null, monthFcfaSource: "minutes", goalMinutes: 10, pron: { attempts: 0, average: null, weeks: [], sounds: [] } };
     fetch("/api/suivi")
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as Partial<SuiviData> & { error?: string };
@@ -48,10 +49,10 @@ export function Suivi() {
   const pronWeeks = data ? fillWeeks(data.pron.weeks.map((w) => ({ start: w.start, minutes: w.score }))) : [];
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Suivi</h1>
-        <Link href="/" className="h-10 rounded-xl border border-line bg-elevated px-4 text-sm font-semibold leading-10">
+        <Link href="/" className="flex h-11 items-center rounded-xl border border-line bg-elevated px-4 text-sm font-semibold">
           Accueil
         </Link>
       </header>
@@ -60,7 +61,7 @@ export function Suivi() {
         <p className="text-sm text-muted">Chargement…</p>
       ) : !data.db ? (
         <section className="rounded-2xl border border-line bg-elevated p-4 text-sm text-muted">
-          Le suivi a besoin de la base de données. Voir <Link href="/reglages" className="underline">Réglages</Link>.
+          Le suivi a besoin de la base de données. Voir <Link href="/admin" className="underline">Admin</Link>.
         </section>
       ) : (
         <>
@@ -78,7 +79,7 @@ export function Suivi() {
                 >
                   Réessayer
                 </button>
-                <Link href="/reglages#diagnostic" className="h-10 flex-1 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
+                <Link href="/admin#diagnostic" className="h-10 flex-1 rounded-xl border border-line bg-elevated text-center text-sm font-semibold leading-10">
                   Diagnostic
                 </Link>
               </div>
@@ -92,7 +93,7 @@ export function Suivi() {
 
           <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">
             <h2 className="text-sm font-semibold">Minutes par semaine</h2>
-            <ul className="flex h-36 items-end gap-2" aria-label="Minutes par semaine, huit dernières semaines">
+            <ul className="flex h-36 items-end gap-2" aria-label="Minutes par semaine, depuis ta première séance">
               {weeks.map((w) => (
                 <li key={w.start} className="flex h-full flex-1 flex-col items-center justify-end gap-1" aria-label={`Semaine du ${w.label} : ${w.minutes} minutes`}>
                   <span className="text-[10px] text-muted">{w.minutes > 0 ? w.minutes : ""}</span>
@@ -101,7 +102,7 @@ export function Suivi() {
                 </li>
               ))}
             </ul>
-            <p className="text-xs text-muted">Objectif : 10 minutes par jour, soit 70 par semaine.</p>
+            <p className="text-xs text-muted">Objectif : {data.goalMinutes} minutes par jour, soit {data.goalMinutes * 7} par semaine.</p>
           </section>
 
           <section className="grid grid-cols-2 gap-2">
@@ -185,6 +186,7 @@ export function Suivi() {
           <QuotaLine quota={data.elevenQuota} monthFcfa={data.monthFcfa} source={data.monthFcfaSource} />
         </>
       )}
+      <TabBar />
     </main>
   );
 }
@@ -203,7 +205,11 @@ function Tile({ value, label }: { value: string; label: string }) {
   );
 }
 
-/** Complète les 8 dernières semaines, même sans séance. */
+/**
+ * Semaines à afficher : de la première semaine avec une séance jusqu'à cette
+ * semaine (8 au plus), sans les semaines vides d'avant la première séance.
+ * Sans aucune séance : la semaine en cours seulement.
+ */
 function fillWeeks(weeks: { start: string; minutes: number }[]) {
   const byStart = new Map(weeks.map((w) => [w.start, w.minutes]));
   const out: { start: string; label: string; minutes: number }[] = [];
@@ -211,10 +217,13 @@ function fillWeeks(weeks: { start: string; minutes: number }[]) {
   const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const day = (monday.getUTCDay() + 6) % 7;
   monday.setUTCDate(monday.getUTCDate() - day);
+  const first = weeks.filter((w) => w.minutes > 0).map((w) => w.start).sort()[0] ?? null;
   for (let i = 7; i >= 0; i--) {
     const d = new Date(monday);
     d.setUTCDate(monday.getUTCDate() - i * 7);
     const start = d.toISOString().slice(0, 10);
+    if (first && start < first) continue;
+    if (!first && i > 0) continue;
     out.push({ start, label: `${d.getUTCDate()}/${d.getUTCMonth() + 1}`, minutes: byStart.get(start) ?? 0 });
   }
   return out;

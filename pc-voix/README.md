@@ -91,6 +91,7 @@ Quand le dépôt change : retélécharge le ZIP, remplace le contenu du dossier 
 ```
 docker compose up -d --build
 ```
+Dernier changement à récupérer (29 oct.) : la saisie au clavier pendant une séance temps réel (commande `text` dans `server.py`). Sans cette mise à jour, le champ « Écrire au clavier » ne fait rien en mode temps réel ; il marche déjà en mode éco.
 
 ## Au quotidien
 

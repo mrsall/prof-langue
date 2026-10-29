@@ -49,6 +49,8 @@ import { usableForShadowing } from "@/config/shadowing";
 import { useLocalStorage, useMounted } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
 import { stripVoiceTags } from "@/lib/text";
+import { TabBar } from "@/components/tab-bar";
+import { kokoroLoaded } from "@/lib/kokoro";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
 import type { Progression } from "@/app/api/sessions/route";
@@ -106,6 +108,7 @@ const TALK_MODE_KEY = "prof-langue:talk-mode";
 const LANGUAGE_KEY = "prof-langue:language";
 const MODE_KEY = "prof-langue:mode";
 const ENGINE_KEY = "prof-langue:engine";
+const AUTO_KEY = "prof-langue:auto";
 
 const REPEAT_COMMAND: Record<Language, string> = {
   en: "Please say your last sentence again, a little slower.",
@@ -148,10 +151,13 @@ function AppInner() {
     savedEngine === "eco" || savedEngine === "live"
       ? savedEngine
       : "elevenlabs";
-  const [savedVoiceChoice, setSavedVoiceChoice] =
-    useLocalStorage(VOICE_CHOICE_KEY);
+  // « Économique (auto) » : l'app choisit la voix et l'oreille du mode éco au début de chaque séance.
+  const [savedAuto, setSavedAuto] = useLocalStorage(AUTO_KEY);
+  const autoEco = savedAuto === "1";
+  // Voix et oreille détaillées : réglées dans /reglages/avance (mêmes clés de stockage).
+  const [savedVoiceChoice] = useLocalStorage(VOICE_CHOICE_KEY);
   const voiceChoice: VoiceChoice = parseVoiceChoice(savedVoiceChoice);
-  const [savedEarChoice, setSavedEarChoice] = useLocalStorage(EAR_CHOICE_KEY);
+  const [savedEarChoice] = useLocalStorage(EAR_CHOICE_KEY);
   const earChoice: EarChoice = parseEarChoice(savedEarChoice);
   const [savedLanguage, setSavedLanguage] = useLocalStorage(LANGUAGE_KEY);
   const language: Language = isLanguage(savedLanguage) ? savedLanguage : "en";
@@ -655,14 +661,36 @@ function AppInner() {
             // Voix ou oreille « Mon PC » : on vérifie le PC en 3 s, sinon repli immédiat plutôt qu'une attente à chaque phrase.
             let voiceForSession = voiceChoice;
             let earForSession = earChoice;
-            if (voiceChoice === "pc" || earChoice === "pc") {
-              const ping = await fetch("/api/pc/ping")
+            const pcConfigured = Boolean(remote?.pc?.configured);
+            const pingPc = () =>
+              fetch("/api/pc/ping")
                 .then((r) => r.json() as Promise<{ ok: boolean }>)
                 .catch(() => ({ ok: false }));
+            if (autoEco) {
+              // Mode auto : la meilleure voix et la meilleure oreille gratuites du moment.
+              const pcUp = pcConfigured ? (await pingPc()).ok : false;
+              if (pcUp) {
+                voiceForSession = "pc";
+                earForSession = "pc";
+              } else {
+                voiceForSession = remote?.gemini?.configured
+                  ? "gemini"
+                  : p.language === "en" && kokoroLoaded()
+                    ? "kokoro"
+                    : "phone";
+                earForSession = remote?.ears?.groq ? "groq" : "phone";
+              }
+              showToast(
+                `Mode auto : voix ${VOICE_LABELS[voiceForSession]}, oreille ${EAR_CHOICES.find((e) => e.key === earForSession)?.label.toLowerCase() ?? earForSession}.`,
+              );
+            } else if (voiceChoice === "pc" || earChoice === "pc") {
+              const ping = await pingPc();
               if (!ping.ok) {
                 if (voiceChoice === "pc") voiceForSession = "eleven";
                 if (earChoice === "pc") earForSession = "groq";
-                showToast("Ton PC ne répond pas : voix ElevenLabs et oreille Groq pour cette séance.");
+                showToast(
+                  "Ton PC ne répond pas : voix ElevenLabs et oreille Groq pour cette séance.",
+                );
               }
             }
             setVoiceFallback(null);
@@ -708,8 +736,15 @@ function AppInner() {
             if (p.engine === "live" && !ending.current) {
               // PC éteint, en veille ou injoignable : on ne laisse pas Cherif sans séance.
               setError(null);
-              const fallbackOk = await startRef.current({ params: { ...params, engine: "eco" }, context, force });
-              if (fallbackOk) showToast("Ton PC ne répond pas : la séance continue en mode éco. Rallume le PC, Docker et Tailscale pour retrouver le temps réel.");
+              const fallbackOk = await startRef.current({
+                params: { ...params, engine: "eco" },
+                context,
+                force,
+              });
+              if (fallbackOk)
+                showToast(
+                  "Ton PC ne répond pas : la séance continue en mode éco. Rallume le PC, Docker et Tailscale pour retrouver le temps réel.",
+                );
               return fallbackOk;
             }
             return false;
@@ -807,6 +842,8 @@ function AppInner() {
       voiceChoice,
       earChoice,
       showToast,
+      autoEco,
+      remote,
     ],
   );
 
@@ -926,6 +963,29 @@ function AppInner() {
     sendUserMessage(REPEAT_COMMAND[live.language]);
   }, [connected, live, sendUserMessage]);
 
+  // Saisie au clavier en séance (lieu public, micro qui ne comprend pas).
+  const [typing, setTyping] = useState(false);
+  const [typed, setTyped] = useState("");
+  const sendTyped = useCallback(() => {
+    const text = typed.trim();
+    if (!connected || !text) return;
+    const eco = ecoRef.current;
+    if (eco) {
+      // Moteurs éco et temps réel : le texte suit le même chemin qu'une phrase entendue (le moteur l'affiche lui-même).
+      if (!eco.sendText(text)) {
+        showToast("Le personnage prépare sa réponse : réessaie dans un instant.");
+        return;
+      }
+    } else {
+      // ElevenLabs : on l'affiche nous-mêmes et on ignore l'écho éventuel de l'agent.
+      userTurns.current += 1;
+      pushLine("user", text);
+      pendingCommand.current = text;
+      sendUserMessage(text);
+    }
+    setTyped("");
+  }, [typed, connected, showToast, pushLine, sendUserMessage]);
+
   const cycleSpeed = useCallback(() => {
     const current = liveRef.current?.speed ?? speed;
     const next =
@@ -1025,7 +1085,8 @@ function AppInner() {
       userShare,
       streak: recorded.streak,
       minutesToday: recorded.minutesToday,
-      goalReached: recorded.minutesToday >= progress.goalMinutes,
+      goalReached:
+        recorded.minutesToday >= (remote?.goalMinutes ?? progress.goalMinutes),
       counted,
     });
     setPhase("bilan");
@@ -1128,7 +1189,9 @@ function AppInner() {
                   ...prev,
                   streak,
                   minutesToday,
-                  goalReached: minutesToday >= progress.goalMinutes,
+                  goalReached:
+                    minutesToday >=
+                    (remote?.goalMinutes ?? progress.goalMinutes),
                 }
               : prev,
           );
@@ -1173,17 +1236,22 @@ function AppInner() {
           talkMode={talkMode}
           onTalkModeChange={setSavedTalkMode}
           engine={engine}
-          onEngineChange={setSavedEngine}
+          autoEco={autoEco}
+          onQualityChange={(q) => {
+            if (q === "max") setSavedEngine("elevenlabs");
+            else {
+              setSavedEngine("eco");
+              setSavedAuto("1");
+            }
+          }}
           voiceChoice={voiceChoice}
-          onVoiceChoiceChange={setSavedVoiceChoice}
           earChoice={earChoice}
-          onEarChoiceChange={setSavedEarChoice}
           pcReady={Boolean(remote?.pc?.configured)}
           streak={remote?.db ? (remote.streak ?? 0) : progress.streak}
           minutesToday={
             remote?.db ? remote.todayAllMinutes : progress.minutesToday
           }
-          goalMinutes={progress.goalMinutes}
+          goalMinutes={remote?.goalMinutes ?? progress.goalMinutes}
           onStart={() => setPhase("topic")}
           level={currentLevel?.level ?? null}
           needsTest={needsTest}
@@ -1235,6 +1303,7 @@ function AppInner() {
         {capSheet}
         <BilanScreen
           summary={summary}
+          goalMinutes={remote?.goalMinutes ?? progress.goalMinutes}
           bilan={bilan}
           loading={bilanLoading}
           personality={live?.personality ?? personality}
@@ -1545,19 +1614,59 @@ function AppInner() {
           onHoldChange={onHoldChange}
         />
       )}
-      <button
-        type="button"
-        onClick={() => {
-          setSavedTalkMode(handsFree ? "appui" : "mains-libres");
-          setHolding(false);
-          setMuted(false);
-        }}
-        className="mx-auto text-xs text-muted underline"
-      >
-        {handsFree
-          ? "Passer en appui pour parler (endroit bruyant)"
-          : "Passer en mains libres"}
-      </button>
+      <div className="flex items-center justify-center gap-4">
+        <button
+          type="button"
+          onClick={() => {
+            setSavedTalkMode(handsFree ? "appui" : "mains-libres");
+            setHolding(false);
+            setMuted(false);
+          }}
+          className="min-h-11 text-xs text-muted underline"
+        >
+          {handsFree
+            ? "Passer en appui pour parler (endroit bruyant)"
+            : "Passer en mains libres"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTyping((t) => !t)}
+          aria-expanded={typing}
+          className="min-h-11 text-xs text-muted underline"
+        >
+          {typing ? "Masquer le clavier" : "Écrire au clavier"}
+        </button>
+      </div>
+      {typing && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            sendTyped();
+          }}
+        >
+          <input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={
+              p.language === "en"
+                ? "Write what you'd say…"
+                : "Écris ce que tu dirais…"
+            }
+            aria-label="Écrire au clavier"
+            autoComplete="off"
+            enterKeyHint="send"
+            className="h-12 min-w-0 flex-1 rounded-xl border border-line bg-elevated px-3 text-base text-fg"
+          />
+          <button
+            type="submit"
+            disabled={!connected || !typed.trim()}
+            className="h-12 shrink-0 rounded-xl bg-accent px-4 text-sm font-bold text-accent-contrast disabled:opacity-60"
+          >
+            Envoyer
+          </button>
+        </form>
+      )}
     </main>
   );
 }
@@ -1757,7 +1866,7 @@ function PcIndicator({
         <button
           type="button"
           onClick={onRetry}
-          className="shrink-0 font-semibold text-accent"
+          className="-my-2 flex min-h-11 shrink-0 items-center rounded-xl px-3 font-semibold text-accent"
         >
           Revérifier
         </button>
@@ -1776,11 +1885,10 @@ function HomeScreen({
   talkMode,
   onTalkModeChange,
   engine,
-  onEngineChange,
+  autoEco,
+  onQualityChange,
   voiceChoice,
-  onVoiceChoiceChange,
   earChoice,
-  onEarChoiceChange,
   pcReady,
   streak,
   minutesToday,
@@ -1802,11 +1910,11 @@ function HomeScreen({
   talkMode: TalkMode;
   onTalkModeChange: (m: TalkMode) => void;
   engine: Engine;
-  onEngineChange: (e: Engine) => void;
+  /** Mode éco en choix automatique (voix et oreille choisies au début de la séance). */
+  autoEco: boolean;
+  onQualityChange: (q: "max" | "eco") => void;
   voiceChoice: VoiceChoice;
-  onVoiceChoiceChange: (v: VoiceChoice) => void;
   earChoice: EarChoice;
-  onEarChoiceChange: (e: EarChoice) => void;
   /** Le PC de Cherif est configuré (voix et oreille locales, mode temps réel). */
   pcReady: boolean;
   streak: number;
@@ -1841,7 +1949,7 @@ function HomeScreen({
     // un squelette plutôt que des sélecteurs par défaut qu'un appui rendrait caducs.
     return (
       <main
-        className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+        className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]"
         aria-busy="true"
       >
         <header className="flex items-center justify-between">
@@ -1859,7 +1967,7 @@ function HomeScreen({
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(6rem,env(safe-area-inset-bottom))]">
       <header className="flex items-center justify-between">
         <div>
           <p className="text-sm text-muted first-letter:uppercase">
@@ -1969,35 +2077,42 @@ function HomeScreen({
             </button>
           ))}
         </div>
-        <div
-          className="-mx-4 flex gap-2 overflow-x-auto px-4 py-1"
-          role="radiogroup"
-          aria-label="Mode"
-        >
-          {PERSONALITIES.map((pers) => {
-            const selected = pers.id === personality.id;
-            return (
-              <button
-                key={pers.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => onModeChange(pers.id)}
-                className={`flex shrink-0 flex-col items-center gap-1 rounded-2xl border px-3 py-2 text-xs font-medium ${
-                  selected
-                    ? "border-accent bg-accent-soft text-accent"
-                    : "border-line bg-elevated text-muted"
-                }`}
-              >
-                <PersonaAvatar
-                  style={pers.avatar}
-                  size={44}
-                  label={pers.name}
-                />
-                <span>{pers.modeLabel}</span>
-              </button>
-            );
-          })}
+        <div className="relative -mx-4">
+          {/* Fondu à droite : montre qu'on peut faire défiler (« Mise en situation » est au bout). */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-elevated to-transparent"
+          />
+          <div
+            className="flex gap-2 overflow-x-auto px-4 py-1 pr-10"
+            role="radiogroup"
+            aria-label="Mode"
+          >
+            {PERSONALITIES.map((pers) => {
+              const selected = pers.id === personality.id;
+              return (
+                <button
+                  key={pers.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => onModeChange(pers.id)}
+                  className={`flex shrink-0 flex-col items-center gap-1 rounded-2xl border px-3 py-2 text-xs font-medium ${
+                    selected
+                      ? "border-accent bg-accent-soft text-accent"
+                      : "border-line bg-elevated text-muted"
+                  }`}
+                >
+                  <PersonaAvatar
+                    style={pers.avatar}
+                    size={44}
+                    label={pers.name}
+                  />
+                  <span>{pers.modeLabel}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -2043,139 +2158,111 @@ function HomeScreen({
           <span className="font-normal text-muted">
             ·{" "}
             {talkMode === "mains-libres" ? "mains libres" : "appui pour parler"}{" "}
-            · {SPEEDS.find((s) => s.key === speed)?.label.toLowerCase()}
-            {engine === "eco"
-              ? " · éco"
+            · {SPEEDS.find((s) => s.key === speed)?.label.toLowerCase()} ·{" "}
+            {engine === "elevenlabs"
+              ? "Max (ElevenLabs)"
               : engine === "live"
-                ? " · temps réel"
-                : ""}
+                ? "temps réel (mon PC)"
+                : autoEco
+                  ? "Économique (auto)"
+                  : `Économique · ${VOICE_LABELS[voiceChoice]} / ${EAR_CHOICES.find((e) => e.key === earChoice)?.label ?? earChoice}`}
           </span>
         </summary>
         <div className="mt-3 flex flex-col gap-3">
-          <div
-            className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
-            role="radiogroup"
-            aria-label="Façon de parler"
-          >
-            {(
-              [
-                { key: "mains-libres", label: "Mains libres" },
-                { key: "appui", label: "Appui pour parler" },
-              ] as { key: TalkMode; label: string }[]
-            ).map((m) => (
-              <button
-                key={m.key}
-                type="button"
-                role="radio"
-                aria-checked={talkMode === m.key}
-                onClick={() => onTalkModeChange(m.key)}
-                className={`h-10 rounded-lg text-sm font-medium ${talkMode === m.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1">
+            <span className="px-1 text-xs font-semibold text-muted">Micro</span>
             <div
-              className={`grid ${pcReady ? "grid-cols-3" : "grid-cols-2"} gap-1.5 rounded-xl bg-bg p-1`}
+              className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
               role="radiogroup"
-              aria-label="Qui fait la voix"
+              aria-label="Façon de parler"
             >
               {(
                 [
-                  {
-                    key: "elevenlabs",
-                    label: pcReady ? "ElevenLabs" : "Conversation ElevenLabs",
-                  },
-                  { key: "eco", label: "Mode éco" },
-                  ...(pcReady
-                    ? [{ key: "live", label: "Temps réel (mon PC)" }]
-                    : []),
-                ] as { key: Engine; label: string }[]
-              ).map((e) => (
+                  { key: "mains-libres", label: "Mains libres" },
+                  { key: "appui", label: "Appui pour parler" },
+                ] as { key: TalkMode; label: string }[]
+              ).map((m) => (
                 <button
-                  key={e.key}
+                  key={m.key}
                   type="button"
                   role="radio"
-                  aria-checked={engine === e.key}
-                  onClick={() => onEngineChange(e.key)}
-                  className={`h-10 rounded-lg text-sm font-medium ${engine === e.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                  aria-checked={talkMode === m.key}
+                  onClick={() => onTalkModeChange(m.key)}
+                  className={`h-11 rounded-lg text-sm font-medium ${talkMode === m.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
                 >
-                  {e.label}
+                  {m.label}
                 </button>
               ))}
             </div>
-            <p className="px-1 text-xs text-muted">
-              {engine === "eco"
-                ? "Le téléphone écoute gratuitement, Claude réfléchit, et seule la lecture de la réponse est confiée à la voix choisie : zéro minute de conversation ElevenLabs. Pour interrompre le personnage, appuie sur le micro."
-                : engine === "live"
-                  ? "Tout se passe sur ton PC (oreille Whisper, Claude, voix Chatterbox) en continu : le PC détecte tout seul la fin de ta phrase, répond vite, et tu peux lui couper la parole en parlant. Gratuit, illimité ; le PC doit être allumé."
-                  : "Conversation en temps réel ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes de conversation."}
-            </p>
-            {engine === "eco" && (
-              <>
-                <div
-                  className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
-                  role="radiogroup"
-                  aria-label="Voix du mode éco"
-                >
-                  {VOICE_CHOICES.map((v) => (
-                    <button
-                      key={v.key}
-                      type="button"
-                      role="radio"
-                      aria-checked={voiceChoice === v.key}
-                      onClick={() => onVoiceChoiceChange(v.key)}
-                      className={`h-10 rounded-lg px-1 text-xs font-medium leading-tight ${voiceChoice === v.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
-                    >
-                      {v.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="px-1 text-xs text-muted">
-                  {VOICE_CHOICES.find((v) => v.key === voiceChoice)?.hint}
-                </p>
-                <div
-                  className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
-                  role="radiogroup"
-                  aria-label="Oreille du mode éco"
-                >
-                  {EAR_CHOICES.map((e) => (
-                    <button
-                      key={e.key}
-                      type="button"
-                      role="radio"
-                      aria-checked={earChoice === e.key}
-                      onClick={() => onEarChoiceChange(e.key)}
-                      className={`h-10 rounded-lg px-1 text-xs font-medium leading-tight ${earChoice === e.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
-                    >
-                      {e.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="px-1 text-xs text-muted">
-                  Oreille : {EAR_CHOICES.find((e) => e.key === earChoice)?.hint}
-                </p>
-              </>
-            )}
           </div>
-          <div
-            className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1"
-            role="radiogroup"
-            aria-label="Vitesse de la voix"
-          >
-            {SPEEDS.map((s) => (
-              <button
-                key={s.key}
-                type="button"
-                role="radio"
-                aria-checked={speed === s.key}
-                onClick={() => onSpeedChange(s.key)}
-                className={`h-10 rounded-lg text-sm font-medium ${speed === s.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
-              >
-                {s.label}
-              </button>
-            ))}
+          <div className="flex flex-col gap-1">
+            <span className="px-1 text-xs font-semibold text-muted">
+              Qualité
+            </span>
+            <div
+              className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1"
+              role="radiogroup"
+              aria-label="Qualité"
+            >
+              {(
+                [
+                  { key: "max", label: "Max (ElevenLabs)" },
+                  { key: "eco", label: "Économique (auto)" },
+                ] as { key: "max" | "eco"; label: string }[]
+              ).map((q) => {
+                const selected =
+                  q.key === "max"
+                    ? engine === "elevenlabs"
+                    : engine !== "elevenlabs";
+                return (
+                  <button
+                    key={q.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => onQualityChange(q.key)}
+                    className={`h-11 rounded-lg text-sm font-medium ${selected ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                  >
+                    {q.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="px-1 text-xs text-muted">
+              {engine === "elevenlabs"
+                ? "Conversation en temps réel ElevenLabs : voix très naturelle et interruption fluide. Consomme tes minutes de conversation."
+                : engine === "live"
+                  ? "Temps réel sur ton PC (réglé dans Réglages avancés) : gratuit, le PC doit être allumé."
+                  : autoEco
+                    ? "L'app choisit au début de chaque séance la meilleure voix et la meilleure oreille gratuites : ton PC s'il est en ligne, sinon les autres. Zéro minute ElevenLabs."
+                    : `Mode éco avec tes choix manuels : voix ${VOICE_LABELS[voiceChoice]}, oreille ${EAR_CHOICES.find((e) => e.key === earChoice)?.label.toLowerCase() ?? earChoice}.`}{" "}
+              <Link href="/reglages/avance" className="underline">
+                Réglages avancés
+              </Link>
+            </p>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="px-1 text-xs font-semibold text-muted">
+              Vitesse
+            </span>
+            <div
+              className="grid grid-cols-3 gap-1.5 rounded-xl bg-bg p-1"
+              role="radiogroup"
+              aria-label="Vitesse de la voix"
+            >
+              {SPEEDS.map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={speed === s.key}
+                  onClick={() => onSpeedChange(s.key)}
+                  className={`h-11 rounded-lg text-sm font-medium ${speed === s.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </details>
@@ -2201,23 +2288,12 @@ function HomeScreen({
         </svg>
         Commencer
       </button>
-      <nav
-        className="flex items-center justify-center gap-4 text-xs text-muted"
-        aria-label="Autres écrans"
-      >
-        <Link href="/carnet" className="underline">
-          Carnet{dueWords > 0 ? ` (${dueWords})` : ""}
-        </Link>
-        <Link href="/prononciation" className="underline">
-          Prononciation
-        </Link>
-        <Link href="/suivi" className="underline">
-          Suivi{level ? ` · ${level}` : ""}
-        </Link>
-        <Link href="/reglages" className="underline">
-          Réglages
-        </Link>
-      </nav>
+      <TabBar
+        badges={{
+          "/carnet": dueWords > 0 ? String(dueWords) : undefined,
+          "/suivi": level ?? undefined,
+        }}
+      />
     </main>
   );
 }
@@ -2430,6 +2506,7 @@ function randomList(personalityId: string, language: Language) {
 
 function BilanScreen({
   summary,
+  goalMinutes,
   bilan,
   loading,
   personality,
@@ -2461,6 +2538,7 @@ function BilanScreen({
   levelResult: (LevelInfo & { error?: string }) | null;
   transcript: TranscriptLine[];
   costFcfa: number | null;
+  goalMinutes: number;
   progression: Progression | null;
   onAgain: () => void;
   onHome: () => void;
@@ -2530,10 +2608,10 @@ function BilanScreen({
           {notCounted
             ? "Tu n'as pas parlé : cette séance n'est pas comptée (ni minutes, ni série, ni bilan)."
             : summary?.goalReached
-            ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
-            : summary
-              ? `${summary.minutesToday} min aujourd'hui sur 10. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
-              : ""}
+              ? `Objectif du jour atteint. Ta série est à ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
+              : summary
+                ? `${summary.minutesToday} min aujourd'hui sur ${goalMinutes}. Série : ${summary.streak} jour${summary.streak > 1 ? "s" : ""}.`
+                : ""}
         </p>
       </header>
 
@@ -2639,7 +2717,9 @@ function BilanScreen({
                 progression.streak < progression.needed && (
                   <p className="text-xs text-muted">
                     Encore {progression.needed - progression.streak} séance
-                    {progression.needed - progression.streak > 1 ? "s" : ""}{" "}
+                    {progression.needed - progression.streak > 1
+                      ? "s"
+                      : ""}{" "}
                     comme celle-ci et tu montes d&apos;un niveau.
                   </p>
                 )}
@@ -2804,7 +2884,7 @@ function BilanScreen({
             </section>
           )}
           {kind !== "test" && !notCounted && (
-            <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+            <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold">Mots du jour</span>
                 {bilan && bilan.words.length > 0 && (
@@ -2835,10 +2915,14 @@ function BilanScreen({
                   Pas assez de discussion pour relever des mots cette fois.
                 </p>
               )}
-              {costFcfa != null && (
-                <p className="mt-auto pt-2 text-xs text-muted">
-                  Mots ajoutés au carnet. Coût estimé de la séance : ≈{" "}
-                  {costFcfa} FCFA.
+              {(costFcfa != null || (bilan && bilan.words.length > 0)) && (
+                <p className="pt-1 text-xs text-muted">
+                  {bilan && bilan.words.length > 0
+                    ? "Mots ajoutés au carnet. "
+                    : ""}
+                  {costFcfa != null
+                    ? `Coût estimé de la séance : ≈ ${costFcfa} FCFA.`
+                    : ""}
                 </p>
               )}
             </section>

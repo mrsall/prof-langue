@@ -421,10 +421,14 @@ try {
     await page.waitForTimeout(1500);
     if (await page.getByText(/La base de données ne répond pas/).count()) throw new Error("carnet : erreur de base");
     await page.goto(`${BASE}/reglages`);
-    await page.getByText("Base de données").waitFor({ timeout: 20000 });
+    await page.getByRole("radiogroup", { name: "Objectif quotidien" }).waitFor({ timeout: 20000 });
+    if (await page.getByText(/DATABASE_URL|SQL de secours|Tailscale/).count()) throw new Error("réglages : des détails techniques (hôte de la base, SQL, Tailscale) sont encore affichés");
+    await page.goto(`${BASE}/admin`);
+    await page.getByRole("heading", { name: "Base de données" }).waitFor({ timeout: 20000 });
     await page.waitForTimeout(1500);
     const badge = await page.locator("section", { hasText: "Base de données" }).first().textContent();
-    if (process.env.DATABASE_URL && !/Prête/.test(badge ?? "")) throw new Error(`réglages : base pas « Prête » (${(badge ?? "").slice(0, 120)})`);
+    if (process.env.DATABASE_URL && !/Base OK/.test(badge ?? "")) throw new Error(`admin : base pas « OK » (${(badge ?? "").slice(0, 120)})`);
+    if (/utilisateur .* · hôte/.test(badge ?? "")) throw new Error("admin : l'hôte de la base est affiché");
   });
   await step("Aucune erreur JavaScript dans la page", async () => {
     if (consoleErrors.length) throw new Error(consoleErrors.slice(0, 3).join(" | "));
@@ -566,6 +570,13 @@ try {
     if (!(stats["/pc/live"] >= 1)) throw new Error(`pas de connexion WebSocket au PC : ${JSON.stringify(stats)}`);
     await noBlockingError();
   });
+  await step("Écrire au clavier (temps réel) → le PC reçoit le texte et répond", async () => {
+    await page.getByRole("button", { name: "Écrire au clavier" }).click();
+    await page.getByLabel("Écrire au clavier").fill("ensuite j'ai lu un livre");
+    await page.getByRole("button", { name: "Envoyer" }).click();
+    await waitBubble("ensuite j'ai lu un livre", 15000);
+    await noBlockingError();
+  });
   await step("PC éteint → la séance temps réel bascule toute seule en mode éco", async () => {
     await page.getByRole("button", { name: "Terminer" }).click();
     await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
@@ -655,6 +666,51 @@ try {
     const users = await countBubbles("mangé du riz");
     if (users !== 1) throw new Error(`prise de parole comptée ${users} fois`);
     await noBlockingError();
+  });
+  await step("Écrire au clavier (mode éco) → la phrase entre dans le texte et Max répond", async () => {
+    // On laisse la réponse lente précédente se terminer (sinon le brouillon fausse le compte).
+    await page.waitForFunction((sel) => !document.querySelector(`${sel}.opacity-70`), transcript, { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const before = await countBubbles("après le café");
+    await page.getByRole("button", { name: "Écrire au clavier" }).click();
+    await page.getByLabel("Écrire au clavier").fill("J'ai bu un thé ce matin");
+    await page.getByRole("button", { name: "Envoyer" }).click();
+    await waitBubble("J'ai bu un thé ce matin", 10000);
+    await page.waitForFunction(([sel, t, n]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length > n, [transcript, "après le café", before], { timeout: 20000 });
+    await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Qualité « Économique (auto) » et réglages avancés
+  page = await newPage(browser, { "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Accueil simplifié : Qualité Max / Économique (auto), réglages avancés");
+  await step("Accueil : Micro, Qualité, Vitesse seulement ; « Économique (auto) » choisit le PC en ligne", async () => {
+    await page.goto(`${BASE}/`);
+    await page.getByRole("button", { name: "Commencer", exact: true }).waitFor({ timeout: 20000 });
+    await page.locator("summary", { hasText: "Micro et vitesse" }).click();
+    for (const name of ["Façon de parler", "Qualité", "Vitesse de la voix"]) await page.getByRole("radiogroup", { name }).waitFor({ timeout: 5000 });
+    if (await page.getByRole("radiogroup", { name: "Voix du mode éco" }).count()) throw new Error("le choix détaillé des voix est encore sur l'accueil");
+    await page.getByRole("radiogroup", { name: "Qualité" }).getByRole("radio", { name: /Économique/ }).click();
+    const auto = await page.evaluate(() => [localStorage.getItem("prof-langue:engine"), localStorage.getItem("prof-langue:auto")]);
+    if (auto[0] !== "eco" || auto[1] !== "1") throw new Error(`stockage : ${JSON.stringify(auto)}`);
+    await mockStats(true);
+    await startSession("fr", "Max");
+    await page.getByText(/Mode auto : voix ton PC/).waitFor({ timeout: 20000 });
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.waitForFunction(async () => true, null, { timeout: 1000 });
+    const stats = await mockStats();
+    if (!(stats["/pc/tts"] >= 1)) throw new Error(`le PC n'a pas parlé en mode auto : ${JSON.stringify(stats)}`);
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/Séance non comptée|À retenir|C'était rapide/).first().waitFor({ timeout: 30000 });
+  });
+  await step("Réglages avancés : groupes « Conversation », « Voix », « Oreille » avec titres ; un choix manuel désactive l'auto", async () => {
+    await page.goto(`${BASE}/reglages/avance`);
+    for (const name of ["Qui fait la voix", "Voix du mode éco", "Oreille du mode éco"]) await page.getByRole("radiogroup", { name }).waitFor({ timeout: 15000 });
+    await page.getByRole("heading", { name: /Voix \(mode éco/ }).waitFor({ timeout: 5000 });
+    await page.getByRole("radiogroup", { name: "Voix du mode éco" }).getByRole("radio", { name: /Téléphone/ }).click();
+    const after = await page.evaluate(() => [localStorage.getItem("prof-langue:voice-choice"), localStorage.getItem("prof-langue:auto")]);
+    if (after[0] !== "phone" || after[1] !== "0") throw new Error(`stockage : ${JSON.stringify(after)}`);
+    await page.getByText(/Choix manuel/).waitFor({ timeout: 5000 });
   });
   await page.context().close();
 
