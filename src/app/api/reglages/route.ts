@@ -3,6 +3,7 @@ import { connection } from "next/server";
 export const maxDuration = 30;
 import { db, dbAvailable, dbErrorMessage, normalizeDatabaseUrl, SCHEMA_SQL, setSetting, withTimeout } from "@/lib/db";
 import { DEFAULT_COST, getCostSettings, getLevel, getReminder, type CostSettings } from "@/lib/settings";
+import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
 import { localeFor, pronunciationAvailable } from "@/lib/pronunciation";
 import { geminiAvailable } from "@/lib/gemini";
 import { groqAvailable } from "@/lib/groq-stt";
@@ -36,6 +37,10 @@ export type ReglagesState = {
   ears: { groq: boolean; scribe: boolean };
   /** Voix « Mon PC » (Chatterbox sur l'ordinateur de Cherif). */
   pc: { configured: boolean; host: string | null };
+  /** Vrais crédits ElevenLabs du mois (null si la clé manque). */
+  elevenQuota: ElevenQuota | null;
+  /** D'où vient `monthFcfa` : des vrais crédits × prix de l'abonnement, ou des minutes estimées. */
+  monthFcfaSource: "quota" | "minutes";
 };
 
 export async function GET() {
@@ -57,8 +62,14 @@ export async function GET() {
     gemini: { configured: geminiAvailable() },
     ears: { groq: groqAvailable(), scribe: sttAvailable() },
     pc: { configured: pcAvailable(), host: pcHost() },
+    elevenQuota: null,
+    monthFcfaSource: "minutes",
   };
-  if (!state.db) return Response.json(state);
+  const quotaJob = process.env.ELEVENLABS_API_KEY ? elevenQuota().catch(() => null) : Promise.resolve(null);
+  if (!state.db) {
+    state.elevenQuota = await quotaJob;
+    return Response.json(state);
+  }
   try {
     const sql = (await withTimeout(db(), 16000))!;
     const [en, fr, cost, reminder, push, today, month, due, days] = await withTimeout(Promise.all([
@@ -82,11 +93,18 @@ export async function GET() {
     state.cost = cost;
     state.todayMinutes = Math.round((today[0]?.seconds ?? 0) / 60);
     state.monthFcfa = Math.round(month[0]?.fcfa ?? 0);
+    state.elevenQuota = await quotaJob;
+    const real = state.elevenQuota ? monthFcfaFromQuota(state.elevenQuota, cost.planFcfa) : null;
+    if (real != null) {
+      state.monthFcfa = real;
+      state.monthFcfaSource = "quota";
+    }
     state.reminder = { enabled: reminder.enabled, hour: reminder.hour, subscribed: push.length > 0 };
     state.dueWords = due[0]?.n ?? 0;
     state.streak = streakFromDays(days.map((d) => d.day));
   } catch (error) {
     state.dbError = dbErrorMessage(error);
+    state.elevenQuota = await quotaJob;
   }
   return Response.json(state);
 }
@@ -107,6 +125,7 @@ export async function POST(request: Request) {
       const next: CostSettings = {
         perMinuteFcfa: clamp(Number(body.cost.perMinuteFcfa ?? current.perMinuteFcfa), 0, 100_000),
         dailyCapMinutes: clamp(Number(body.cost.dailyCapMinutes ?? current.dailyCapMinutes), 1, 600),
+        planFcfa: clamp(Number(body.cost.planFcfa ?? current.planFcfa), 0, 10_000_000),
       };
       await setSetting("cost", next);
     }

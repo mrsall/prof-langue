@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage, withTimeout } from "@/lib/db";
-import { getLevel } from "@/lib/settings";
+import { getCostSettings, getLevel } from "@/lib/settings";
+import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
 
 export const maxDuration = 30;
 
@@ -21,6 +22,8 @@ export type SuiviData = {
   progression: { day: string; language: string; level: string }[];
   byMode: { personality: string; minutes: number }[];
   monthFcfa: number;
+  elevenQuota: ElevenQuota | null;
+  monthFcfaSource: "quota" | "minutes";
   /** V4 : prononciation (vide tant qu'aucune phrase n'a été notée). */
   pron: { attempts: number; average: number | null; weeks: { start: string; score: number }[]; sounds: { language: string; phoneme: string; score: number; attempts: number }[] };
 };
@@ -39,12 +42,15 @@ export async function GET() {
     progression: [],
     byMode: [],
     monthFcfa: 0,
+    elevenQuota: null,
+    monthFcfaSource: "minutes",
     pron: { attempts: 0, average: null, weeks: [], sounds: [] },
   };
   if (!empty.db) return Response.json(empty);
   try {
     const sql = (await withTimeout(db(), 16000))!;
-    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression] = await withTimeout(Promise.all([
+    const quotaJob = process.env.ELEVENLABS_API_KEY ? elevenQuota().catch(() => null) : Promise.resolve(null);
+    const [weeks, days, totals, words, due, byMode, month, en, fr, pronWeeks, pronTotals, pronSounds, progression, cost] = await withTimeout(Promise.all([
       sql<{ start: string; seconds: number }[]>`select to_char(date_trunc('week', started_at at time zone 'Africa/Dakar'), 'YYYY-MM-DD') as start,
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
@@ -67,7 +73,10 @@ export async function GET() {
         (score_sum / greatest(attempts, 1))::int as score from pron_sounds where attempts >= 3 order by 4 asc limit 6`,
       sql<{ day: string; language: string; level: string }[]>`select to_char(started_at at time zone 'Africa/Dakar', 'YYYY-MM-DD') as day, language, observed_level as level
         from sessions where observed_level is not null and kind = 'conversation' and seconds >= 180 order by started_at desc limit 14`,
+      getCostSettings(),
     ]), 20000);
+    const quota = await quotaJob;
+    const realFcfa = quota ? monthFcfaFromQuota(quota, cost.planFcfa) : null;
     return Response.json({
       ...empty,
       weeks: weeks.map((w) => ({ start: w.start, minutes: Math.round(w.seconds / 60) })),
@@ -79,7 +88,9 @@ export async function GET() {
       levels: { en: en?.level ?? null, fr: fr?.level ?? null },
       progression,
       byMode: byMode.map((m) => ({ personality: m.personality, minutes: Math.round(m.seconds / 60) })),
-      monthFcfa: Math.round(month[0]?.fcfa ?? 0),
+      monthFcfa: realFcfa ?? Math.round(month[0]?.fcfa ?? 0),
+      elevenQuota: quota,
+      monthFcfaSource: realFcfa != null ? "quota" : "minutes",
       pron: {
         attempts: pronTotals[0]?.n ?? 0,
         average: pronTotals[0]?.avg ?? null,
