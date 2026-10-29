@@ -33,10 +33,12 @@ export type LiveOptions = {
 
 /** Réserve d'audio avant de lancer la lecture d'une réplique (voir `maybeStartPlayback`). */
 const RESERVE_CHUNKS = 2;
-const RESERVE_SECONDS = 3;
-const FAST_RTF = 0.8;
 const WAIT_FAST_MS = 2500;
 const WAIT_SLOW_MS = 12000;
+/** Durée typique d'une réplique entière (1 à 3 phrases) : sert à dimensionner la réserve quand le RTF dépasse 1. */
+const REPLY_ESTIMATE_S = 20;
+/** Marge ajoutée à la réserve (réseau, décodage). */
+const RESERVE_MARGIN_S = 0.6;
 /** Sans nouveau son pendant ce temps au milieu d'une réplique, on rend la main (PC muet, réseau coupé). */
 const GAP_GIVE_UP_MS = 15000;
 
@@ -424,21 +426,26 @@ export class LiveEngine {
   }
 
   /**
-   * Première lecture d'une réplique : on attend une petite réserve pour ne jamais commencer une phrase
-   * qu'on devrait interrompre en attendant la suivante. Si le PC fabrique moins vite qu'il ne se lit
-   * (RTF > 1, ou inconnu), on attend la fin de la réponse (`agent`) ; sinon 2 morceaux, 3 s d'audio,
-   * ou 2,5 s d'attente. Pendant ce temps, le personnage « réfléchit ».
+   * Première lecture d'une réplique : on attend une réserve d'audio pour ne jamais commencer une phrase
+   * qu'on devrait interrompre en attendant la suivante. Le PC envoie des morceaux de durée semblable :
+   * le suivant se fabrique pendant que le précédent se lit, et le déficit par morceau vaut (RTF − 1) × sa
+   * durée. La réserve nécessaire est donc (RTF − 1) × durée estimée de la réplique + une marge :
+   * à RTF 1,02 moins d'une seconde (la première phrase suffit), à RTF 1,7 toute la réponse.
+   * RTF inconnu (début de séance) : 2 morceaux ou la fin de la réponse. Pendant l'attente, le
+   * personnage « réfléchit ».
    */
   private maybeStartPlayback() {
     if (this.playbackStarted || this.pendingBuffers.length === 0) return;
     const waited = this.firstChunkAt ? performance.now() - this.firstChunkAt : 0;
-    const slow = this.rtf == null || this.rtf > 1;
+    const need =
+      this.rtf == null
+        ? null
+        : Math.max(0, this.rtf - 1) * REPLY_ESTIMATE_S + RESERVE_MARGIN_S;
+    const slow = need == null || need > 6;
     const ready =
       this.agentDone ||
-      (!slow &&
-        (this.pendingBuffers.length >= RESERVE_CHUNKS ||
-          this.reserveSeconds() >= RESERVE_SECONDS ||
-          (this.rtf != null && this.rtf <= FAST_RTF))) ||
+      (need != null && this.reserveSeconds() >= need) ||
+      (need == null && this.pendingBuffers.length >= RESERVE_CHUNKS) ||
       waited >= (slow ? WAIT_SLOW_MS : WAIT_FAST_MS);
     if (!ready) {
       if (!this.startTimer) {
