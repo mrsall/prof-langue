@@ -49,3 +49,18 @@ export function useLocalStorage(key: string) {
 
   return [value, setValue] as const;
 }
+
+const noopSubscribe = () => () => {};
+
+/**
+ * `false` pendant le rendu serveur et l'hydratation, `true` dès que les
+ * préférences du téléphone (localStorage) sont lisibles. Sert à ne pas
+ * afficher des sélecteurs par défaut qu'un appui rendrait caducs.
+ */
+export function useMounted() {
+  return useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false,
+  );
+}

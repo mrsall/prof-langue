@@ -46,7 +46,7 @@ import {
 } from "@/config/correction";
 import { randomTopic } from "@/config/topics";
 import { usableForShadowing } from "@/config/shadowing";
-import { useLocalStorage } from "@/lib/use-local-storage";
+import { useLocalStorage, useMounted } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
 import { stripVoiceTags } from "@/lib/text";
 import { useHistory } from "@/lib/history";
@@ -1817,6 +1817,7 @@ function HomeScreen({
 }) {
   const today = useToday();
   const pc = usePcStatus(pcReady);
+  const mounted = useMounted();
   const dateLabel = today
     ? today.toLocaleDateString("fr-FR", {
         weekday: "long",
@@ -1828,6 +1829,28 @@ function HomeScreen({
   const pct = Math.min(100, Math.round((minutesToday / goalMinutes) * 100));
   const displayName =
     personality.id === "situation" ? personality.modeLabel : personality.name;
+
+  if (!mounted) {
+    // Les choix enregistrés (langue, personnage, micro, vitesse) ne sont pas encore lus :
+    // un squelette plutôt que des sélecteurs par défaut qu'un appui rendrait caducs.
+    return (
+      <main
+        className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+        aria-busy="true"
+      >
+        <header className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Salut Cherif !</h1>
+        </header>
+        {[72, 56, 96, 320, 56, 56].map((h, i) => (
+          <div
+            key={i}
+            className="animate-pulse rounded-2xl border border-line bg-elevated"
+            style={{ height: h }}
+          />
+        ))}
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
