@@ -387,6 +387,13 @@ try {
     await page.getByText(/Répéter \d+ phrase/).waitFor({ timeout: 10000 });
     await page.getByText(/Niveau observé aujourd/).waitFor({ timeout: 10000 });
   });
+  await step("Série de jours : le bilan, l'accueil (/api/reglages) et le suivi (/api/suivi) disent le même chiffre", async () => {
+    const reglages = await (await page.request.get(`${BASE}/api/reglages`)).json();
+    const suivi = await (await page.request.get(`${BASE}/api/suivi`)).json();
+    if (!(reglages.streak >= 1)) throw new Error(`série serveur : ${reglages.streak} (une séance d'aujourd'hui existe)`);
+    if (suivi.streak !== reglages.streak) throw new Error(`suivi ${suivi.streak} ≠ accueil ${reglages.streak}`);
+    await page.waitForFunction((n) => new RegExp(`(Série : ${n} jour|Ta série est à ${n} jour)`).test(document.body.textContent || ""), reglages.streak, { timeout: 15000 });
+  });
   await step("Prononciation depuis le bilan : écoute, répétition notée, phrase suivante", async () => {
     await page.getByText(/Répéter \d+ phrase/).click();
     await page.waitForURL(/\/prononciation/, { timeout: 15000 });

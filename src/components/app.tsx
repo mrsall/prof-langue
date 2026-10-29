@@ -988,8 +988,15 @@ function AppInner() {
       agentTalkMs.current > 0 ? agentTalkMs.current : wordsOf("agent") * 380;
     const total = userMs + agentMs;
     const userShare = total > 0 ? Math.round((userMs / total) * 100) : 0;
-    const recorded =
-      seconds >= 30
+    // Avec une base, la série et les minutes font foi côté serveur (/api/sessions les renvoie) ;
+    // la mémoire du téléphone ne sert qu'en mode téléphone seul.
+    const hasDb = Boolean(remote?.db);
+    const recorded = hasDb
+      ? {
+          streak: remote?.streak ?? 0,
+          minutesToday: remote?.todayAllMinutes ?? 0,
+        }
+      : seconds >= 30
         ? progress.recordSession(seconds)
         : { streak: progress.streak, minutesToday: progress.minutesToday };
     if (p && seconds >= 30) {
@@ -1100,16 +1107,32 @@ function AppInner() {
           saved?: boolean;
           costFcfa?: number;
           progression?: Progression | null;
+          streak?: number | null;
+          todayAllMinutes?: number | null;
         };
         if (data.saved && typeof data.costFcfa === "number")
           setSavedCost(data.costFcfa);
         if (data.saved) setProgression(data.progression ?? null);
+        if (data.saved && typeof data.streak === "number") {
+          const streak = data.streak;
+          const minutesToday = data.todayAllMinutes ?? recorded.minutesToday;
+          setSummary((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  streak,
+                  minutesToday,
+                  goalReached: minutesToday >= progress.goalMinutes,
+                }
+              : prev,
+          );
+        }
       } catch {
         // la séance reste dans l'historique du téléphone
       }
       refreshRemote();
     }
-  }, [connected, status, endSession, progress, history, refreshRemote]);
+  }, [connected, status, endSession, progress, history, refreshRemote, remote]);
 
   useEffect(() => {
     finishRef.current = () => void finish();
@@ -1150,15 +1173,9 @@ function AppInner() {
           earChoice={earChoice}
           onEarChoiceChange={setSavedEarChoice}
           pcReady={Boolean(remote?.pc?.configured)}
-          streak={
-            remote?.db && remote.streak != null
-              ? Math.max(remote.streak, progress.streak)
-              : progress.streak
-          }
+          streak={remote?.db ? (remote.streak ?? 0) : progress.streak}
           minutesToday={
-            remote?.db
-              ? Math.max(remote.todayMinutes, progress.minutesToday)
-              : progress.minutesToday
+            remote?.db ? remote.todayAllMinutes : progress.minutesToday
           }
           goalMinutes={progress.goalMinutes}
           onStart={() => setPhase("topic")}

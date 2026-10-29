@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { db, dbAvailable, dbErrorMessage, withTimeout } from "@/lib/db";
 import { getCostSettings, getLevel } from "@/lib/settings";
 import { elevenQuota, monthFcfaFromQuota, type ElevenQuota } from "@/lib/elevenlabs-quota";
+import { streakFromDays } from "@/lib/streak";
 
 export const maxDuration = 30;
 
@@ -55,7 +56,7 @@ export async function GET() {
         sum(seconds)::int as seconds from sessions
         where started_at > now() - interval '8 weeks' group by 1 order by 1`,
       sql<{ day: string }[]>`select distinct to_char((started_at at time zone 'Africa/Dakar')::date, 'YYYY-MM-DD') as day
-        from sessions where seconds >= 30 order by 1 desc limit 400`,
+        from sessions where seconds >= 30 order by 1 desc limit 400`, // même règle que src/lib/streak.ts (dayStats)
       sql<{ n: number; seconds: number }[]>`select count(*)::int as n, coalesce(sum(seconds), 0)::int as seconds from sessions`,
       sql<{ n: number }[]>`select count(*)::int as n from words`,
       sql<{ n: number }[]>`select count(*)::int as n from words where due_at <= now()`,
@@ -101,20 +102,4 @@ export async function GET() {
   } catch (error) {
     return Response.json({ ...empty, error: dbErrorMessage(error) }, { status: 502 });
   }
-}
-
-/** Jours consécutifs avec une séance, en comptant aujourd'hui ou hier comme point de départ. */
-function streakFromDays(days: string[]) {
-  if (days.length === 0) return 0;
-  const set = new Set(days);
-  const today = new Date();
-  const key = (d: Date) => d.toISOString().slice(0, 10);
-  const cursor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  if (!set.has(key(cursor))) cursor.setUTCDate(cursor.getUTCDate() - 1);
-  let streak = 0;
-  while (set.has(key(cursor))) {
-    streak += 1;
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
-  }
-  return streak;
 }
