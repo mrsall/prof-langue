@@ -184,7 +184,7 @@ const server = http.createServer(async (req, res) => {
 
   // ---- PC de Cherif (Chatterbox)
   if (req.method === "GET" && path === "/pc/health") {
-    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami"], stt: "faster-whisper large-v3-turbo (cuda)", error: null });
+    return json(res, 200, { ok: true, warm: true, model: "chatterbox-multilingual (v3)", device: "cuda", gpu: "NVIDIA GeForce RTX 4070", voices: ["prof", "ami"], stt: "faster-whisper large-v3-turbo (cuda)", live: true, claude: { configured: true, ok: true, hint: "sk-ant-…test", model: "test", error: null }, error: null });
   }
   if (req.method === "POST" && path === "/pc/stt") {
     if (req.headers.authorization !== "Bearer test") return json(res, 401, { detail: "Mot de passe refusé." });
