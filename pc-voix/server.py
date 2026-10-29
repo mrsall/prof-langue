@@ -19,6 +19,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -122,16 +123,110 @@ def tidy(samples, sr: int):
     return x
 
 
-def synthesize(text: str, language: str, voice: str) -> bytes:
-    model = state["model"]
+# Chatterbox relit et décode le fichier de référence (ffmpeg) et recalcule l'empreinte de la voix à CHAQUE
+# `generate(..., audio_prompt_path=…)`. On prépare donc les conditionnels une fois par (fichier, date, moteur)
+# et on les garde en mémoire : la phrase suivante part tout de suite sur la carte.
+_conds_cache: dict[tuple, object] = {}
+FP16 = clean_env("CHATTERBOX_FP16") in ("1", "true", "yes")
+# B2 : moteur pour l'anglais. "multilingual" (défaut, français et anglais) ou "turbo" (Chatterbox Turbo, anglais seulement,
+# plus léger et plus rapide ; le français reste sur le multilingue). Chargé seulement si demandé.
+TTS_ENGINE = (clean_env("PC_TTS_ENGINE") or "multilingual").lower()
+# Mesure (étape 0) : les 20 dernières phrases, pour /health et /admin.
+RTF_WINDOW = 20
+state.setdefault("rtf", [])
+
+
+def record_rtf(chars: int, gen_s: float, audio_s: float, engine: str):
+    rtf = gen_s / audio_s if audio_s > 0 else None
+    state["rtf"].append({"chars": chars, "genMs": int(gen_s * 1000), "audioMs": int(audio_s * 1000), "rtf": round(rtf, 2) if rtf else None, "engine": engine})
+    del state["rtf"][:-RTF_WINDOW]
+    log.info("voix [%s] %d caractères · fabrication %.2f s · audio %.2f s · RTF %s", engine, chars, gen_s, audio_s, f"{rtf:.2f}" if rtf else "?")
+
+
+def rtf_summary():
+    rows = [r for r in state["rtf"] if r["rtf"]]
+    if not rows:
+        return {"count": 0, "avg": None, "last": None}
+    return {"count": len(rows), "avg": round(sum(r["rtf"] for r in rows) / len(rows), 2), "last": rows[-1]["rtf"]}
+
+
+def engine_for(language: str):
+    """(nom, modèle) : Turbo pour l'anglais s'il est chargé, sinon le multilingue."""
+    if language == "en" and state.get("turbo") is not None:
+        return "turbo", state["turbo"]
+    return "multilingual", state["model"]
+
+
+def available_engines():
+    out = []
+    if state["model"] is not None:
+        out.append("multilingual")
+    if state.get("turbo") is not None:
+        out.append("turbo")
+    return out
+
+
+def conditionals_for(model, engine: str, prompt: str | None):
+    """Conditionnels (empreinte de la voix) préparés une fois par fichier ; rechargés si le fichier change."""
+    if not prompt:
+        return None
+    key = (engine, prompt, os.path.getmtime(prompt))
+    conds = _conds_cache.get(key)
+    if conds is None:
+        start = time.time()
+        model.prepare_conditionals(prompt, exaggeration=EXAGGERATION)
+        conds = model.conds
+        # une seule entrée par (moteur, fichier) : on oublie les anciennes dates
+        for k in [k for k in _conds_cache if k[0] == engine and k[1] == prompt]:
+            del _conds_cache[k]
+        _conds_cache[key] = conds
+        log.info("Voix de référence préparée (%s, %s) en %.2f s", engine, os.path.basename(prompt), time.time() - start)
+    return conds
+
+
+def forget_voice(prompt_stem: str | None = None):
+    """Après un nouvel enregistrement : on oublie les empreintes concernées (toutes si stem absent)."""
+    for k in list(_conds_cache):
+        if prompt_stem is None or os.path.basename(k[1]).startswith(prompt_stem):
+            del _conds_cache[k]
+
+
+def synthesize(text: str, language: str, voice: str, engine: str | None = None) -> bytes:
+    name, model = engine_for(language) if not engine else (engine, state["turbo"] if engine == "turbo" and state.get("turbo") is not None else state["model"])
+    if engine == "turbo" and name != "turbo":
+        name = "multilingual"
     prompt = voice_file(voice, language)
     if not prompt and language == "fr":
         log.warning("Aucune voix de référence française dans %s : la voix intégrée a un accent anglais (voir voix/README.md).", VOICES_DIR)
-    wav = model.generate(text, language_id=language, audio_prompt_path=prompt, exaggeration=EXAGGERATION, cfg_weight=CFG_WEIGHT)
+    start = time.time()
+    conds = conditionals_for(model, name, prompt)
+    if conds is not None:
+        model.conds = conds
+    kwargs = dict(exaggeration=EXAGGERATION, cfg_weight=CFG_WEIGHT)
+    if name == "multilingual":
+        kwargs["language_id"] = language
+    elif conds is None:
+        # Turbo sans référence : il lui en faut une ; on retombe sur le multilingue.
+        name, model = "multilingual", state["model"]
+        kwargs["language_id"] = language
+    if FP16 and DEVICE == "cuda":
+        with torch.autocast("cuda", dtype=torch.float16):
+            wav = model.generate(text, **kwargs)
+    else:
+        wav = model.generate(text, **kwargs)
     samples = tidy(wav.squeeze(0).detach().cpu().numpy(), model.sr)
+    record_rtf(len(text), time.time() - start, samples.size / model.sr, name)
     buf = io.BytesIO()
     sf.write(buf, samples, model.sr, subtype="PCM_16", format="WAV")
     return buf.getvalue()
+
+
+def load_turbo():
+    from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+    start = time.time()
+    state["turbo"] = ChatterboxTurboTTS.from_pretrained(device=DEVICE)
+    log.info("Chatterbox Turbo (anglais) chargé en %.1f s", time.time() - start)
 
 
 @app.on_event("startup")
@@ -146,6 +241,14 @@ async def startup():
     except Exception as error:  # noqa: BLE001
         state["error"] = str(error)
         log.exception("Chargement impossible")
+    if TTS_ENGINE == "turbo":
+        try:
+            await run_in_threadpool(load_turbo)
+            if voice_file("prof", "en"):
+                await run_in_threadpool(synthesize, "Hello Cherif, I am ready.", "en", "prof", "turbo")
+        except Exception as error:  # noqa: BLE001
+            state["turbo_error"] = str(error)
+            log.exception("Chatterbox Turbo indisponible : l'anglais reste sur le multilingue")
     # L'oreille (Whisper) : facultative, la voix marche sans elle.
     try:
         await run_in_threadpool(load_whisper)
@@ -174,17 +277,44 @@ def load_whisper():
     log.info("Whisper chargé en %.1f s : %s", time.time() - start, name)
 
 
+# Whisper « invente » volontiers une phrase sur du bruit ou du silence (fin de vidéo YouTube dans ses données).
+# Sur un énoncé court, ces phrases connues sont ignorées ; un segment trop peu sûr aussi.
+_NOISE_PHRASES = {
+    "thank you", "thanks", "thank you very much", "thanks for watching", "you", "bye", "okay", "ok",
+    "merci", "merci beaucoup", "au revoir", "sous-titres réalisés par la communauté d'amara.org", "sous-titres réalisés par l'amara.org",
+    "sous-titrage st' 501", "sous-titrage société radio-canada", "amara.org",
+}
+NO_SPEECH_MAX = 0.6
+LOGPROB_MIN = -1.0
+SHORT_UTTERANCE_S = 1.5
+
+
+def is_noise_phrase(text: str) -> bool:
+    plain = re.sub(r"[^\w' ]+", " ", text.lower()).strip()
+    plain = re.sub(r"\s+", " ", plain)
+    return plain in _NOISE_PHRASES or plain.startswith("sous-titres réalisés") or plain.startswith("sous-titrage")
+
+
 def transcribe(path: str, language: str):
     segments, info = state["stt"].transcribe(path, language=language, beam_size=1, vad_filter=True, word_timestamps=True, condition_on_previous_text=False)
     words = []
     texts = []
+    dropped = 0
     for seg in segments:
+        if getattr(seg, "no_speech_prob", 0.0) > NO_SPEECH_MAX or getattr(seg, "avg_logprob", 0.0) < LOGPROB_MIN:
+            dropped += 1
+            continue
         texts.append(seg.text.strip())
         for w in seg.words or []:
             if w.word.strip():
                 words.append({"text": w.word.strip(), "start": round(w.start, 3), "end": round(w.end, 3)})
     text = " ".join(t for t in texts if t)
     duration = int((words[-1]["end"] - words[0]["start"]) * 1000) if len(words) >= 1 and words[-1]["end"] > words[0]["start"] else None
+    if text and (duration is None or duration < SHORT_UTTERANCE_S * 1000) and is_noise_phrase(text):
+        log.info("oreille : « %s » ignoré (phrase typique du bruit sur un énoncé court)", text)
+        text, words, duration = "", [], None
+    if dropped:
+        log.info("oreille : %d segment(s) peu sûr(s) ignoré(s)", dropped)
     return {"text": text, "words": words, "durationMs": duration, "language": info.language}
 
 
@@ -199,6 +329,8 @@ class TtsBody(BaseModel):
     text: str
     language: str = "fr"
     voice: str = ""
+    # "multilingual" | "turbo" : force un moteur (page de comparaison) ; vide = choix automatique.
+    engine: str = ""
 
 
 @app.get("/health")
@@ -216,6 +348,12 @@ async def health():
             "stt_error": state["stt_error"],
             "live": state.get("vad") is not None and state["stt"] is not None and bool(ANTHROPIC_KEY),
             "claude": state.get("claude"),
+            "rtf": rtf_summary(),
+            "engines": available_engines(),
+            "engine": TTS_ENGINE,
+            "turbo_error": state.get("turbo_error"),
+            "fp16": FP16,
+            "cfg": CFG_WEIGHT,
             "error": state["error"],
         }
     )
@@ -234,12 +372,78 @@ async def tts(body: TtsBody):
     start = time.time()
     async with gpu_lock:  # une phrase à la fois sur la carte graphique
         try:
-            audio = await run_in_threadpool(synthesize, text, language, body.voice)
+            audio = await run_in_threadpool(synthesize, text, language, body.voice, body.engine or None)
         except Exception as error:  # noqa: BLE001
             log.exception("Synthèse impossible")
             raise HTTPException(status_code=500, detail=f"Synthèse impossible : {error}") from error
-    log.info("%s · %d caractères · %.1f s", language, len(text), time.time() - start)
-    return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store", "X-Generation-Ms": str(int((time.time() - start) * 1000))})
+    last = state["rtf"][-1] if state["rtf"] else {}
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={"Cache-Control": "no-store", "X-Generation-Ms": str(int((time.time() - start) * 1000)), "X-Audio-Ms": str(last.get("audioMs", 0)), "X-Rtf": str(last.get("rtf") or ""), "X-Engine": str(last.get("engine", ""))},
+    )
+
+
+# ---- B1 : enregistrer une vraie voix depuis le téléphone (Admin → « Enregistrer une voix »)
+RECORD_MAX_S = 20
+VOICE_NAMES = {"default", "prof", "ami", "grand-frere", "debatteur", "collegue", "situation", "juge"}
+
+
+@app.post("/voices", dependencies=[Depends(check_token)])
+async def upload_voice(audio: UploadFile = File(...), voice: str = Form(...), language: str = Form("fr")):
+    """Reçoit un enregistrement (webm, mp4, wav…), le convertit en WAV 24 kHz mono (20 s max) et l'installe
+    comme voix de référence `voix/<personnage>.<langue>.wav`. Le dossier doit être en écriture (docker-compose.yml)."""
+    safe = "".join(c for c in voice.lower() if c.isalnum() or c in "-_")
+    if safe not in VOICE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Personnage inconnu : {voice}.")
+    lang = language if language in LANGUAGES else "fr"
+    data = await audio.read()
+    if len(data) < 5000:
+        raise HTTPException(status_code=400, detail="Enregistrement vide ou trop court.")
+    if len(data) > 20_000_000:
+        raise HTTPException(status_code=413, detail="Enregistrement trop long.")
+    suffix = os.path.splitext(audio.filename or "")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        src = tmp.name
+
+    def convert():
+        import librosa
+        import numpy as np
+
+        y, _ = librosa.load(src, sr=24000, mono=True)
+        y = y[: 24000 * RECORD_MAX_S]
+        if y.size < 24000 * 3:
+            raise ValueError("Il faut au moins 3 secondes de voix.")
+        peak = float(np.max(np.abs(y))) or 1.0
+        y = (y / peak) * 0.9
+        VOICES_DIR.mkdir(parents=True, exist_ok=True)
+        stem = f"{safe}.{lang}"
+        for ext in AUDIO_EXT:
+            old = VOICES_DIR / f"{stem}{ext}"
+            if old.exists() and ext != ".wav":
+                old.unlink()
+        target = VOICES_DIR / f"{stem}.wav"
+        sf.write(str(target), y, 24000, subtype="PCM_16", format="WAV")
+        return str(target), y.size / 24000
+
+    try:
+        target, seconds = await run_in_threadpool(convert)
+    except PermissionError as error:
+        raise HTTPException(status_code=500, detail="Le dossier voix est en lecture seule : retire « :ro » sur la ligne « ./voix:/voix » de docker-compose.yml puis relance.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:  # noqa: BLE001
+        log.exception("Enregistrement de voix impossible")
+        raise HTTPException(status_code=500, detail=f"Conversion impossible : {error}") from error
+    finally:
+        try:
+            os.unlink(src)
+        except OSError:
+            pass
+    forget_voice(f"{safe}.{lang}")
+    log.info("Nouvelle voix de référence : %s (%.1f s)", target, seconds)
+    return JSONResponse({"ok": True, "file": os.path.basename(target), "seconds": round(seconds, 1), "voices": available_voices()})
 
 
 @app.post("/stt", dependencies=[Depends(check_token)])
@@ -318,7 +522,12 @@ SR = 16000
 WINDOW = 512  # taille de fenêtre du VAD Silero à 16 kHz (32 ms)
 START_WINDOWS = 3  # ≈ 100 ms de voix pour commencer une prise de parole
 END_SILENCE_WINDOWS = int(0.7 * SR / WINDOW)  # ≈ 700 ms de silence = fin de phrase
-BARGE_WINDOWS = 8  # ≈ 250 ms de voix nette pour couper le personnage
+BARGE_WINDOWS = 19  # ≈ 600 ms de voix nette (> 0,85) pendant que le personnage parle : candidat à l'interruption
+BARGE_PROB = 0.85
+BARGE_VERIFY_S = 1.0  # après ≈ 1 s de voix, on vérifie par Whisper avant de couper
+BARGE_MIN_WORDS = 2
+ECHO_MAX_SIMILARITY = 0.5  # texte trop proche de ce que le personnage vient de dire = écho de sa propre voix
+GROUP_CHARS = 120  # après la première phrase, on regroupe jusqu'à ≈ 120 caractères par morceau de voix
 MAX_UTTERANCE_S = 45
 PARTIAL_EVERY_S = 1.0
 PAD_WINDOWS = 10  # ≈ 320 ms gardés avant le début détecté
@@ -416,6 +625,14 @@ class LiveSession:
         self.respond_task: asyncio.Task | None = None
         self.partial_task: asyncio.Task | None = None
         self.speaking_until = 0.0
+        # Ce que le téléphone joue vraiment (commande « playback ») ; sinon on se rabat sur speaking_until.
+        self.playback_known = False
+        self.playing = False
+        # Barge-in en attente de vérification (voix pendant que le personnage parle).
+        self.pending_barge = False
+        self.barge_verified_at = 0.0
+        # Dernières phrases dites par le personnage (pour reconnaître l'écho de sa propre voix).
+        self.spoken_recent: list[str] = []
         self.turn_id = 0
         self.last_agent_text: str | None = None
         # état de l'oreille
@@ -474,6 +691,12 @@ class LiveSession:
         if kind == "interrupt":
             self.cancel_response()
             self.speaking_until = 0.0
+            self.playing = False
+        elif kind == "playback":
+            self.playback_known = True
+            self.playing = bool(cmd.get("playing"))
+            if not self.playing:
+                self.speaking_until = 0.0
         elif kind == "flush":
             if self.in_speech or self.utter:
                 await self.end_turn()
@@ -516,18 +739,18 @@ class LiveSession:
 
         prob = float(self.vad(torch.from_numpy(np.ascontiguousarray(window)), SR).item())
         now = time.time()
-        agent_speaking = now < self.speaking_until
+        # Personnage occupé = une réponse est en cours (Claude écrit, voix en fabrication ou en lecture).
+        # Pendant ce temps, aucune prise de parole « normale » : seul le chemin barge-in, vérifié, peut couper.
+        agent_busy = self.agent_busy(now)
         if not self.in_speech:
             self.pad.append(window)
             if len(self.pad) > PAD_WINDOWS:
                 self.pad.pop(0)
-            if agent_speaking:
-                # Cherif coupe le personnage : voix nette un quart de seconde.
-                self.barge_windows = self.barge_windows + 1 if prob > 0.75 else 0
+            if agent_busy:
+                self.barge_windows = self.barge_windows + 1 if prob > BARGE_PROB else 0
                 if self.barge_windows >= BARGE_WINDOWS:
-                    self.cancel_response()
-                    self.speaking_until = 0.0
-                    asyncio.get_event_loop().create_task(self.send({"type": "interrupt"}))
+                    # On enregistre sans rien couper : Whisper confirmera (≥ 2 mots, pas l'écho du personnage).
+                    self.pending_barge = True
                     self.begin_utterance(now)
                 return
             self.speech_windows = self.speech_windows + 1 if prob > 0.5 else 0
@@ -541,9 +764,64 @@ class LiveSession:
             self.silence_windows = 0
         if self.silence_windows >= END_SILENCE_WINDOWS or now - self.utter_started > MAX_UTTERANCE_S:
             asyncio.get_event_loop().create_task(self.end_turn())
+        elif self.pending_barge and now - self.utter_started > BARGE_VERIFY_S and (self.partial_task is None or self.partial_task.done()):
+            # Barge-in : vérification au plus tôt, pour couper vite si c'est bien Cherif.
+            self.last_partial = now
+            self.partial_task = asyncio.get_event_loop().create_task(self.send_partial())
         elif now - self.last_partial > PARTIAL_EVERY_S and (self.partial_task is None or self.partial_task.done()):
             self.last_partial = now
             self.partial_task = asyncio.get_event_loop().create_task(self.send_partial())
+
+    def agent_busy(self, now: float) -> bool:
+        responding = self.respond_task is not None and not self.respond_task.done()
+        speaking = self.playing if self.playback_known else now < self.speaking_until
+        return responding or speaking
+
+    def looks_like_echo(self, text: str) -> bool:
+        """Vrai si le texte ressemble à ce que le personnage vient de dire (écho de sa propre voix dans le micro)."""
+        plain = re.sub(r"[^\w' ]+", " ", text.lower()).strip()
+        if not plain:
+            return True
+        for said in self.spoken_recent[-4:]:
+            ref = re.sub(r"[^\w' ]+", " ", said.lower()).strip()
+            if not ref:
+                continue
+            if plain in ref or ref in plain:
+                return True
+            # distance d'édition normalisée sur les mots
+            a, b = plain.split(), ref.split()
+            if not a or not b:
+                continue
+            prev = list(range(len(b) + 1))
+            for i in range(1, len(a) + 1):
+                cur = [i]
+                for j in range(1, len(b) + 1):
+                    cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (0 if a[i - 1] == b[j - 1] else 1)))
+                prev = cur
+            if prev[-1] / max(len(a), len(b)) < ECHO_MAX_SIMILARITY:
+                return True
+        return False
+
+    def confirm_barge(self, text: str) -> bool:
+        """Barge-in accepté : au moins 2 mots et pas l'écho du personnage. Sinon on jette l'énoncé."""
+        words = [w for w in re.split(r"\s+", text.strip()) if w]
+        if len(words) >= BARGE_MIN_WORDS and not self.looks_like_echo(text):
+            return True
+        return False
+
+    def accept_barge(self):
+        self.pending_barge = False
+        self.cancel_response()
+        self.speaking_until = 0.0
+        self.playing = False
+        asyncio.get_event_loop().create_task(self.send({"type": "interrupt"}))
+
+    def drop_utterance(self, why: str):
+        log.info("oreille (temps réel) : énoncé ignoré (%s)", why)
+        self.in_speech = False
+        self.pending_barge = False
+        self.utter = []
+        self.turn_id += 1
 
     def begin_utterance(self, now: float):
         self.in_speech = True
@@ -582,7 +860,16 @@ class LiveSession:
             return
         finally:
             os.unlink(path)
-        if turn == self.turn_id and self.in_speech and result["text"]:
+        if turn != self.turn_id or not self.in_speech:
+            return
+        if self.pending_barge:
+            if self.confirm_barge(result["text"]):
+                log.info("barge-in confirmé : « %s »", result["text"][:60])
+                self.accept_barge()
+            elif result["text"] and self.looks_like_echo(result["text"]):
+                self.drop_utterance(f"écho du personnage : « {result['text'][:40]} »")
+                return
+        if result["text"]:
             await self.send({"type": "partial", "text": result["text"]})
 
     async def end_turn(self):
@@ -606,6 +893,16 @@ class LiveSession:
         text = result["text"].strip()
         log.info("oreille (temps réel) %.2f s · « %s »", time.time() - start, text[:80])
         if len(text) < 2:
+            self.pending_barge = False
+            return
+        if self.pending_barge:
+            # Voix entendue pendant que le personnage parlait : on ne coupe que si c'est vraiment Cherif.
+            if not self.confirm_barge(text):
+                self.drop_utterance(f"pas une vraie interruption : « {text[:40]} »")
+                return
+            self.accept_barge()
+        elif self.agent_busy(time.time()) and self.looks_like_echo(text):
+            self.drop_utterance(f"écho pendant la réponse : « {text[:40]} »")
             return
         self.cancel_response()
         await self.send({"type": "user", "text": text})
@@ -645,6 +942,35 @@ class LiveSession:
         full = ""
         seq = 0
         first_sentence_at = None
+        group: list[str] = []
+        self.spoken_recent = []
+
+        async def speak_group():
+            nonlocal seq
+            if not group:
+                return
+            seq += 1
+            joined = " ".join(group)
+            group.clear()
+            await self.speak_sentence(joined, seq, claude_ms=int((first_sentence_at - started) * 1000) if seq == 1 and first_sentence_at else None)
+
+        async def on_sentence(sentence: str):
+            nonlocal first_sentence_at
+            if first_sentence_at is None:
+                first_sentence_at = time.time()
+            # La première phrase part seule (démarrage rapide) ; les suivantes sont regroupées (≈ 120 caractères)
+            # pour que chaque morceau se fabrique pendant que le précédent se lit.
+            if seq == 0:
+                group.append(sentence)
+                await speak_group()
+                return
+            # on ne mélange pas le juge et Leo dans un même morceau
+            if group and (("<voice" in sentence) != ("<voice" in group[0])):
+                await speak_group()
+            group.append(sentence)
+            if sum(len(g) for g in group) >= GROUP_CHARS:
+                await speak_group()
+
         try:
             kwargs = dict(model=ANTHROPIC_MODEL, max_tokens=2048, system=system, messages=messages, thinking={"type": "disabled"})
             try:
@@ -658,20 +984,15 @@ class LiveSession:
                     full += delta
                     await self.send({"type": "delta", "text": delta})
                     for sentence in buffer.push(delta):
-                        if first_sentence_at is None:
-                            first_sentence_at = time.time()
-                        seq += 1
-                        voice_ms = await self.speak_sentence(sentence, seq)
-                        if seq == 1:
-                            await self.send({"type": "timing", "claudeMs": int((first_sentence_at - started) * 1000), "voiceMs": voice_ms})
+                        await on_sentence(sentence)
             finally:
                 await stream_cm.__aexit__(None, None, None)
             rest = buffer.flush()
             if rest:
-                seq += 1
-                voice_ms = await self.speak_sentence(rest, seq)
-                if seq == 1:
-                    await self.send({"type": "timing", "claudeMs": int((time.time() - started) * 1000), "voiceMs": voice_ms})
+                if first_sentence_at is None:
+                    first_sentence_at = time.time()
+                group.append(rest)
+            await speak_group()
             text = full.strip()
             if not text:
                 text = "Pardon, j'ai eu un petit souci de mon côté. Tu peux redire ta phrase ?" if self.language == "fr" else "Sorry, I had a small hiccup on my side. Can you say that again?"
@@ -690,7 +1011,7 @@ class LiveSession:
             fatal = "401" in msg or "authentication" in msg.lower()
             await self.send({"type": "error", "message": ("Clé Anthropic refusée (pc-voix/.env)." if fatal else f"Claude n'a pas répondu : {msg[:120]}"), "fatal": fatal})
 
-    async def speak_sentence(self, sentence: str, seq: int) -> int:
+    async def speak_sentence(self, sentence: str, seq: int, claude_ms: int | None = None) -> int:
         start = time.time()
         plain = strip_voice_tags(sentence)
         if not plain:
@@ -699,17 +1020,30 @@ class LiveSession:
         async with gpu_lock:
             audio = await run_in_threadpool(synthesize, plain, self.language, role_voice)
         ms = int((time.time() - start) * 1000)
+        audio_s = wav_seconds(audio, state["model"].sr)
+        self.spoken_recent.append(plain)
+        del self.spoken_recent[:-6]
         await self.send({"type": "speak", "text": plain, "seq": seq})
         if not self.closed:
             await self.ws.send_bytes(audio)
+        # Étape 0 : un `timing` par morceau (fabrication, durée, RTF) ; `claudeMs` seulement sur le premier.
+        await self.send({"type": "timing", "seq": seq, "claudeMs": claude_ms, "voiceMs": ms, "audioMs": int(audio_s * 1000), "rtf": round(ms / 1000 / audio_s, 2) if audio_s > 0 else None})
         now = time.time()
-        self.speaking_until = max(now, self.speaking_until) + wav_seconds(audio, state["model"].sr) + 0.3
+        self.speaking_until = max(now, self.speaking_until) + audio_s + 0.3
         return ms
 
     async def speak_text(self, text: str, record: bool):
         try:
-            for i, sentence in enumerate(SentenceBuffer().push(text + " ") or [text], start=1):
-                await self.speak_sentence(sentence, i)
+            self.spoken_recent = []
+            sentences = SentenceBuffer().push(text + " ") or [text]
+            pieces: list[str] = [sentences[0]]
+            for sentence in sentences[1:]:
+                if len(pieces) > 1 and len(pieces[-1]) + len(sentence) < GROUP_CHARS:
+                    pieces[-1] = f"{pieces[-1]} {sentence}"
+                else:
+                    pieces.append(sentence)
+            for i, piece in enumerate(pieces, start=1):
+                await self.speak_sentence(piece, i)
             if record:
                 self.last_agent_text = text
                 self.history.append({"role": "agent", "text": text})
