@@ -682,6 +682,13 @@ function AppInner() {
           if (!ok) {
             setEcoStatus("disconnected");
             if (ecoRef.current === eng) ecoRef.current = null;
+            if (p.engine === "live" && !ending.current) {
+              // PC éteint, en veille ou injoignable : on ne laisse pas Cherif sans séance.
+              setError(null);
+              const fallbackOk = await startRef.current({ params: { ...params, engine: "eco" }, context, force });
+              if (fallbackOk) setNotice("Ton PC ne répond pas : la séance continue en mode éco (voix et oreille au choix de l'accueil). Rallume le PC, Docker et Tailscale pour retrouver le temps réel.");
+              return fallbackOk;
+            }
             return false;
           }
           return true;

@@ -54,6 +54,8 @@ export class LiveEngine {
   private history: TranscriptLine[];
   private rate: number;
   private generation = 0;
+  /** Nombre de répliques échangées : distingue une coupure immédiate d'une coupure en cours de séance. */
+  private exchanges = 0;
 
   constructor(private readonly options: LiveOptions) {
     this.history = [...(options.history ?? [])];
@@ -196,7 +198,10 @@ export class LiveEngine {
           this.teardown();
           cb.onDisconnect({
             reason: "error",
-            message: "La connexion avec le PC s'est coupée.",
+            message:
+              this.exchanges === 0
+                ? "Le PC a coupé la connexion tout de suite : regarde ses journaux (docker compose logs --tail 100) ou repasse en mode éco sur l'accueil."
+                : "La connexion avec le PC s'est coupée (PC en veille, Tailscale ou réseau). Reprends, ou repasse en mode éco sur l'accueil.",
           });
         }
       };
@@ -342,6 +347,7 @@ export class LiveEngine {
         this.pendingSpeak = { text: msg.text, seq: msg.seq };
         break;
       case "agent":
+        this.exchanges += 1;
         cb.onDraft?.(null);
         this.draft = "";
         this.lastAgentText = msg.text;

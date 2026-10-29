@@ -13,6 +13,8 @@ const log = (...args) => console.log("[mock]", ...args);
 /** Compteur d'appels par chemin, lisible sur GET /__stats (remis à zéro par POST /__reset). */
 const stats = {};
 const count = (key) => (stats[key] = (stats[key] ?? 0) + 1);
+/** PC « éteint » (POST /__pc {down:true}) : plus de voix, d'oreille ni de temps réel. */
+let pcDown = false;
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -119,6 +121,11 @@ const server = http.createServer(async (req, res) => {
   log(req.method, path);
   count(path.startsWith("/v1/text-to-speech/") ? "tts" : path.startsWith("/v1beta/models/") ? "gemini" : path);
   if (req.method === "GET" && path === "/__stats") return json(res, 200, stats);
+  if (req.method === "POST" && path === "/__pc") {
+    pcDown = Boolean(JSON.parse(raw.toString("utf8") || "{}").down);
+    return json(res, 200, { down: pcDown });
+  }
+  if (pcDown && path.startsWith("/pc/")) return json(res, 503, { detail: "PC éteint (simulation)" });
   if (req.method === "POST" && path === "/__reset") {
     for (const k of Object.keys(stats)) delete stats[k];
     return json(res, 200, { ok: true });
@@ -257,7 +264,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  if (url.pathname !== "/pc/live") return socket.destroy();
+  if (url.pathname !== "/pc/live" || pcDown) return socket.destroy();
   wss.handleUpgrade(req, socket, head, (ws) => {
     count("/pc/live");
     let loud = 0;

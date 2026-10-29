@@ -78,6 +78,13 @@ Le téléphone parle directement à ton PC (WebSocket à travers Tailscale) : le
 
 Le PC ne reçoit que du son et du texte de séance ; rien n'est enregistré sur disque (les fichiers temporaires de transcription sont effacés aussitôt). Le mot de passe du PC ne quitte jamais Vercel : l'app donne au téléphone un ticket signé, valable 3 heures, que le PC vérifie.
 
+## 9. Si le mode temps réel se coupe ou ne répond plus
+
+- **Le PC s'est mis en veille** (souvent la nuit) : Tailscale et Docker ne répondent plus. Réveille-le, puis Windows → Paramètres → Système → Alimentation : règle « Mettre en veille » sur « Jamais » quand il est branché.
+- **Docker ou Tailscale ne tournent plus** : dans PowerShell, dans `pc-voix`, `docker compose up -d` puis `tailscale funnel --bg 8765`.
+- **La séance se coupe dès le début** : `docker compose logs --tail 100` montre l'erreur ; envoie les dernières lignes.
+- Dans tous les cas, l'app bascule toute seule en mode éco quand le PC ne répond pas au démarrage d'une séance, et tu peux toujours choisir « Mode éco » ou « ElevenLabs » sur l'accueil.
+
 ## Mettre à jour le serveur
 
 Quand le dépôt change : retélécharge le ZIP, remplace le contenu du dossier `pc-voix` **en gardant ton fichier `.env` et ton dossier `voix`**, puis dans PowerShell, dans `pc-voix` :
