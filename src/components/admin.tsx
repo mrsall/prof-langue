@@ -6,6 +6,7 @@ import type { AgentStatus } from "@/app/api/elevenlabs/agent/route";
 import type { FrenchVoicesStatus } from "@/app/api/elevenlabs/voices-fr/route";
 import type { ReglagesState } from "@/app/api/reglages/route";
 import { TabBar } from "@/components/tab-bar";
+import { VoiceRecorder } from "@/components/voice-recorder";
 
 /**
  * Admin : tout ce qui sert à diagnostiquer l'installation (agent ElevenLabs,
@@ -99,7 +100,7 @@ export function Admin() {
     }
   };
 
-  type PcDiag = { ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; live?: boolean; claude?: string | null; ms: number; generationMs: number | null; error: string | null };
+  type PcDiag = { ok: boolean; gpu: string | null; model: string | null; voices: string[]; stt?: string | null; live?: boolean; claude?: string | null; ms: number; generationMs: number | null; error: string | null; rtf?: { count: number; avg: number | null; last: number | null } | null; engines?: string[] };
   const [pc, setPc] = useState<PcDiag | null>(null);
   const [pcBusy, setPcBusy] = useState(false);
   const testPc = async () => {
@@ -113,7 +114,7 @@ export function Admin() {
         void audio.play().catch(() => undefined);
       }
     } catch {
-      setPc({ ok: false, gpu: null, model: null, voices: [], ms: 0, generationMs: null, error: "impossible de joindre le serveur de l'app" });
+      setPc({ ok: false, gpu: null, model: null, voices: [], ms: 0, generationMs: null, error: "impossible de joindre le serveur de l'app", rtf: null, engines: [] });
     } finally {
       setPcBusy(false);
     }
@@ -273,6 +274,17 @@ export function Admin() {
                 {pc.ok ? `${pc.gpu ?? "GPU ?"} · ${pc.model ?? "modèle ?"} · ${pc.generationMs ?? "?"} ms de synthèse, ${pc.ms} ms au total${pc.voices.length ? ` · ${pc.voices.length} voix` : " · voix par défaut"}${pc.stt ? ` · oreille : ${pc.stt}` : " · oreille Whisper absente"}${pc.claude ? ` · Claude sur le PC : ${pc.claude}` : ""}${pc.live ? " · temps réel prêt" : " · temps réel pas prêt"}` : pc.error}
               </p>
             )}
+            {pc?.ok && (
+              <p className={`rounded-xl px-3 py-2 text-xs ${pc.rtf?.avg != null && pc.rtf.avg > 1 ? "bg-listening/10 text-listening" : "bg-bg text-muted"}`}>
+                {pc.rtf?.avg != null
+                  ? `Vitesse de fabrication (RTF, ${pc.rtf.count} dernières phrases) : ${pc.rtf.avg}. ${pc.rtf.avg > 1 ? "Au-dessus de 1 : la carte fabrique moins vite qu'elle ne lit ; le téléphone attend la fin de la réponse avant de parler. Essaie CHATTERBOX_FP16=1 puis CHATTERBOX_CFG=0 dans docker-compose.yml." : "Sous 1 : la voix se fabrique plus vite qu'elle ne se lit, les phrases s'enchaînent sans trou."}`
+                  : "Vitesse de fabrication (RTF) : pas encore mesurée, fais une séance temps réel puis reviens ici."}
+                {(pc.engines?.length ?? 0) > 1 ? ` Moteurs chargés : ${(pc.engines ?? []).join(", ")}.` : ""}
+              </p>
+            )}
+            <Link href="/test-voix-pc" className="flex h-11 items-center justify-between rounded-xl border border-line bg-bg px-4 text-sm font-semibold">
+              Comparer les moteurs de voix du PC <span aria-hidden>›</span>
+            </Link>
           </>
         ) : (
           <div className="flex flex-col gap-2 text-sm text-muted">
@@ -284,6 +296,8 @@ export function Admin() {
           </div>
         )}
       </Card>
+
+      {state?.pc.configured && <VoiceRecorder voices={pc?.voices ?? []} />}
 
       <Card title="Oreille Groq (gratuite)" badge={state ? { label: state.ears.groq ? "Clé présente" : "À configurer", tone: state.ears.groq ? "ok" : "warn" } : null}>
         {state?.ears.groq ? (

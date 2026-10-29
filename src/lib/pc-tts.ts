@@ -53,6 +53,14 @@ export type PcHealth = {
   /** Mode temps réel possible (VAD, Whisper et clé Anthropic présents). */
   live?: boolean;
   claude?: { configured: boolean; ok: boolean; hint: string | null; model: string; error: string | null } | null;
+  /** Étape 0 : vitesse de fabrication mesurée (fabrication / durée) sur les 20 dernières phrases. */
+  rtf?: { count: number; avg: number | null; last: number | null } | null;
+  /** Moteurs de voix chargés sur le PC ("multilingual", "turbo"). */
+  engines?: string[];
+  engine?: string;
+  turbo_error?: string | null;
+  fp16?: boolean;
+  cfg?: number;
   error?: string | null;
 };
 
@@ -106,7 +114,9 @@ export async function pcTranscribe(audio: Blob, language: Language): Promise<{ t
   };
 }
 
-export async function pcSpeak(options: { text: string; language: Language; voice: string; timeoutMs?: number }): Promise<{ wav: Buffer; generationMs: number | null }> {
+export type PcVoiceEngine = "multilingual" | "turbo";
+
+export async function pcSpeak(options: { text: string; language: Language; voice: string; timeoutMs?: number; engine?: PcVoiceEngine | null }): Promise<{ wav: Buffer; generationMs: number | null; audioMs: number | null; rtf: number | null; engine: string | null }> {
   if (!pcAvailable()) throw new Error("Voix du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
   if (pcLikelyDown()) throw new Error(DOWN_MESSAGE);
   const controller = new AbortController();
@@ -116,7 +126,7 @@ export async function pcSpeak(options: { text: string; language: Language; voice
     res = await fetch(`${pcBaseUrl()}/tts`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.PC_TTS_TOKEN!.trim()}` },
-      body: JSON.stringify({ text: options.text, language: options.language, voice: options.voice }),
+      body: JSON.stringify({ text: options.text, language: options.language, voice: options.voice, engine: options.engine ?? "" }),
       signal: controller.signal,
     });
   } catch (error) {
@@ -133,5 +143,40 @@ export async function pcSpeak(options: { text: string; language: Language; voice
   const wav = Buffer.from(await res.arrayBuffer());
   if (wav.length < 100) throw new Error("Le PC a renvoyé un son vide.");
   const gen = Number(res.headers.get("x-generation-ms"));
-  return { wav, generationMs: Number.isFinite(gen) && gen > 0 ? gen : null };
+  const audioMs = Number(res.headers.get("x-audio-ms"));
+  const rtf = Number(res.headers.get("x-rtf"));
+  return {
+    wav,
+    generationMs: Number.isFinite(gen) && gen > 0 ? gen : null,
+    audioMs: Number.isFinite(audioMs) && audioMs > 0 ? audioMs : null,
+    rtf: Number.isFinite(rtf) && rtf > 0 ? rtf : null,
+    engine: res.headers.get("x-engine") || null,
+  };
+}
+
+/** B1 : envoie un enregistrement du téléphone au PC, qui l'installe comme voix de référence du personnage. */
+export async function pcUploadVoice(audio: Blob, filename: string, voice: string, language: Language): Promise<{ ok: boolean; file?: string; seconds?: number; voices?: string[] }> {
+  if (!pcAvailable()) throw new Error("Voix du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
+  const form = new FormData();
+  form.append("audio", audio, filename);
+  form.append("voice", voice);
+  form.append("language", language);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  let res: Response;
+  try {
+    res = await fetch(`${pcBaseUrl()}/voices`, { method: "POST", headers: { Authorization: `Bearer ${process.env.PC_TTS_TOKEN!.trim()}` }, body: form, signal: controller.signal });
+  } catch (error) {
+    markPcDown();
+    throw new Error(error instanceof Error && error.name === "AbortError" ? "Le PC met trop de temps à enregistrer la voix." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { detail?: string };
+    if (res.status === 401) throw new Error("Le PC refuse le mot de passe (PC_TTS_TOKEN).");
+    if (res.status === 404) throw new Error("Le serveur du PC est trop ancien pour recevoir une voix : mets-le à jour (pc-voix/server.py) puis docker compose up -d --build.");
+    throw new Error(detail.detail ?? `Le PC a répondu ${res.status}.`);
+  }
+  return (await res.json()) as { ok: boolean; file?: string; seconds?: number; voices?: string[] };
 }
