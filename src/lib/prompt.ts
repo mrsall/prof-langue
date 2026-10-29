@@ -1,5 +1,6 @@
 import { CORRECTION_INSTRUCTIONS, type CorrectionLevel } from "@/config/correction";
 import type { Language, Personality } from "@/config/personalities";
+import type { EnglishVariant } from "@/lib/settings";
 
 /**
  * Assemble les consignes envoyées à l'agent : personnage, règles communes,
@@ -94,9 +95,18 @@ ${list}
 Pour chaque mot : donne une définition ou une situation et demande-lui le mot ; ou demande-lui de l'utiliser dans une phrase. S'il trouve, confirme en quelques mots et passe au suivant. Sinon, donne la réponse, fais-la répéter une fois, puis passe au suivant. Rapide et chaleureux. À la fin, félicite-le et dis quels mots revoir.`;
 }
 
+/** Consigne de variante d'anglais, partagée par la conversation, le bilan et les sujets. */
+export function englishVariantNote(variant: EnglishVariant): string {
+  return variant === "uk"
+    ? "English variant: BRITISH English, consistently (spelling: colour, organise, practise as a verb; vocabulary: football, flat, holiday, queue). Never mix it with American forms."
+    : "English variant: AMERICAN English, consistently (spelling: color, organize, practice; vocabulary: soccer, apartment, vacation, line). Never mix it with British forms.";
+}
+
 export function buildPrompt(options: {
   personality: Personality;
   language: Language;
+  /** Variante d'anglais (ignorée en français). */
+  englishVariant?: EnglishVariant;
   correction: CorrectionLevel;
   topic: string | null;
   ownTopic: boolean;
@@ -112,10 +122,11 @@ export function buildPrompt(options: {
   /** Débat rejoué : même motion, mêmes camps, points à vérifier. */
   rematch?: Rematch | null;
 }) {
-  const { personality, language, correction, topic, ownTopic, memory, context, kind = "conversation", levelText, reviewWords, recycleWords, pastErrors, rematch } = options;
+  const { personality, language, correction, topic, ownTopic, memory, context, kind = "conversation", levelText, reviewWords, recycleWords, pastErrors, rematch, englishVariant = "us" } = options;
   const parts: string[] = [];
 
   parts.push(personality.character[language]);
+  if (language === "en") parts.push(englishVariantNote(englishVariant));
   const defaultLevel =
     language === "en"
       ? "No English level test yet: start simple (around A2) and raise the level quickly if he handles it."

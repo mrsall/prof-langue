@@ -399,6 +399,31 @@ export function SettingsV3() {
       {state.db && (
         <>
           <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">
+            <h2 className="text-base font-semibold">Anglais enseigné</h2>
+            <p className="text-sm text-muted">Tous les personnages, le bilan et le carnet suivent la même variante (orthographe et vocabulaire), pour ne plus mélanger « practise » et « soccer ».</p>
+            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-bg p-1" role="radiogroup" aria-label="Variante d'anglais">
+              {(
+                [
+                  { key: "us", label: "Américain" },
+                  { key: "uk", label: "Britannique" },
+                ] as const
+              ).map((v) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={state.englishVariant === v.key}
+                  disabled={saving}
+                  onClick={() => save({ englishVariant: v.key })}
+                  className={`h-11 rounded-lg text-sm font-medium ${state.englishVariant === v.key ? "bg-accent font-semibold text-accent-contrast" : "text-muted"}`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-4">
             <h2 className="text-base font-semibold">Dépenses</h2>
             <p className="text-sm text-muted">
               Aujourd&apos;hui : {state.todayMinutes} min sur {state.cost.dailyCapMinutes}.

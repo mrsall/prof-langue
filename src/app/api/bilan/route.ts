@@ -1,6 +1,8 @@
 import { connection } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { askClaude } from "@/lib/claude";
+import { englishVariantNote } from "@/lib/prompt";
+import { getEnglishVariant, type EnglishVariant } from "@/lib/settings";
 import { findPersonality, isLanguage, type Language } from "@/config/personalities";
 
 export const maxDuration = 30;
@@ -43,10 +45,11 @@ function emptyBilan(available: boolean): BilanResult {
   return { available, words: [], errors: [], corrections: [], upgrades: [], debate: null, encouragement: null, suggestTeacher: false, teacherFocus: null, level: null, levelWhy: null };
 }
 
-function systemPrompt(language: Language, name: string, recapHint: string | undefined) {
+function systemPrompt(language: Language, name: string, recapHint: string | undefined, variant: EnglishVariant) {
   const target = language === "en" ? "English" : "French";
   return `You help Cherif, a French speaker from Senegal, improve his spoken ${target}. You receive the transcript of a spoken conversation between Cherif and ${name}.
-
+${language === "en" ? `${englishVariantNote(variant)} Everything you write in English (words, corrections, upgrades, encouragement) follows it.
+` : ""}
 Return ONLY a JSON object, no prose, no code fences, with this exact shape:
 {"words":[{"en":"...","fr":"..."}],"errors":[{"wrong":"...","right":"...","tip":"..."}],"corrections":[{"index":12,"corrected":"..."}],"upgrades":[{"used":"...","better":"...","why":"..."}],"debate":null,"encouragement":"...","suggestTeacher":false,"teacherFocus":"...","level":"B1","levelWhy":"..."}
 
@@ -165,7 +168,7 @@ export async function POST(request: Request) {
       maxTokens: 4096,
       effort: "low",
       thinking: "adaptive",
-      system: systemPrompt(language, name, personality.recapHint?.[language]),
+      system: systemPrompt(language, name, personality.recapHint?.[language], language === "en" ? await getEnglishVariant().catch(() => "us" as const) : "us"),
       messages: [
         {
           role: "user",
