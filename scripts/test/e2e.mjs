@@ -658,6 +658,39 @@ try {
   });
   await page.context().close();
 
+  // ------------------------------------------------------------------ Qualité « Économique (auto) » et réglages avancés
+  page = await newPage(browser, { "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Accueil simplifié : Qualité Max / Économique (auto), réglages avancés");
+  await step("Accueil : Micro, Qualité, Vitesse seulement ; « Économique (auto) » choisit le PC en ligne", async () => {
+    await page.goto(`${BASE}/`);
+    await page.getByRole("button", { name: "Commencer", exact: true }).waitFor({ timeout: 20000 });
+    await page.locator("summary", { hasText: "Micro et vitesse" }).click();
+    for (const name of ["Façon de parler", "Qualité", "Vitesse de la voix"]) await page.getByRole("radiogroup", { name }).waitFor({ timeout: 5000 });
+    if (await page.getByRole("radiogroup", { name: "Voix du mode éco" }).count()) throw new Error("le choix détaillé des voix est encore sur l'accueil");
+    await page.getByRole("radiogroup", { name: "Qualité" }).getByRole("radio", { name: /Économique/ }).click();
+    const auto = await page.evaluate(() => [localStorage.getItem("prof-langue:engine"), localStorage.getItem("prof-langue:auto")]);
+    if (auto[0] !== "eco" || auto[1] !== "1") throw new Error(`stockage : ${JSON.stringify(auto)}`);
+    await mockStats(true);
+    await startSession("fr", "Max");
+    await page.getByText(/Mode auto : voix ton PC/).waitFor({ timeout: 20000 });
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.waitForFunction(async () => true, null, { timeout: 1000 });
+    const stats = await mockStats();
+    if (!(stats["/pc/tts"] >= 1)) throw new Error(`le PC n'a pas parlé en mode auto : ${JSON.stringify(stats)}`);
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/Séance non comptée|À retenir|C'était rapide/).first().waitFor({ timeout: 30000 });
+  });
+  await step("Réglages avancés : groupes « Conversation », « Voix », « Oreille » avec titres ; un choix manuel désactive l'auto", async () => {
+    await page.goto(`${BASE}/reglages/avance`);
+    for (const name of ["Qui fait la voix", "Voix du mode éco", "Oreille du mode éco"]) await page.getByRole("radiogroup", { name }).waitFor({ timeout: 15000 });
+    await page.getByRole("heading", { name: /Voix \(mode éco/ }).waitFor({ timeout: 5000 });
+    await page.getByRole("radiogroup", { name: "Voix du mode éco" }).getByRole("radio", { name: /Téléphone/ }).click();
+    const after = await page.evaluate(() => [localStorage.getItem("prof-langue:voice-choice"), localStorage.getItem("prof-langue:auto")]);
+    if (after[0] !== "phone" || after[1] !== "0") throw new Error(`stockage : ${JSON.stringify(after)}`);
+    await page.getByText(/Choix manuel/).waitFor({ timeout: 5000 });
+  });
+  await page.context().close();
+
   // ------------------------------------------------------------------ Séance vide, compteurs de mots
   page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "phone", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
   console.log("Séance sans prise de parole, compteurs de mots");
