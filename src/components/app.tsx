@@ -645,7 +645,20 @@ function AppInner() {
             // Temps réel : oreille, Claude et voix tournent sur le PC de Cherif ; le téléphone envoie le micro en continu.
             eng = new LiveEngine(common);
           } else {
-            let speaker = createSpeaker(voiceChoice, {
+            // Voix ou oreille « Mon PC » : on vérifie le PC en 3 s, sinon repli immédiat plutôt qu'une attente à chaque phrase.
+            let voiceForSession = voiceChoice;
+            let earForSession = earChoice;
+            if (voiceChoice === "pc" || earChoice === "pc") {
+              const ping = await fetch("/api/pc/ping")
+                .then((r) => r.json() as Promise<{ ok: boolean }>)
+                .catch(() => ({ ok: false }));
+              if (!ping.ok) {
+                if (voiceChoice === "pc") voiceForSession = "eleven";
+                if (earChoice === "pc") earForSession = "groq";
+                showToast("Ton PC ne répond pas : voix ElevenLabs et oreille Groq pour cette séance.");
+              }
+            }
+            let speaker = createSpeaker(voiceForSession, {
               language: p.language,
               personalityId: p.personality.id,
             });
@@ -675,7 +688,7 @@ function AppInner() {
                 `La voix ${VOICE_CHOICES.find((v) => v.key === voiceChoice)?.label ?? ""} n'a pas pu se charger : ElevenLabs prend le relais.`,
               );
             }
-            eng = new EcoEngine({ ...common, speaker, ear: earChoice });
+            eng = new EcoEngine({ ...common, speaker, ear: earForSession });
           }
           ecoRef.current = eng;
           const ok = await eng.start();
@@ -686,7 +699,7 @@ function AppInner() {
               // PC éteint, en veille ou injoignable : on ne laisse pas Cherif sans séance.
               setError(null);
               const fallbackOk = await startRef.current({ params: { ...params, engine: "eco" }, context, force });
-              if (fallbackOk) setNotice("Ton PC ne répond pas : la séance continue en mode éco (voix et oreille au choix de l'accueil). Rallume le PC, Docker et Tailscale pour retrouver le temps réel.");
+              if (fallbackOk) showToast("Ton PC ne répond pas : la séance continue en mode éco. Rallume le PC, Docker et Tailscale pour retrouver le temps réel.");
               return fallbackOk;
             }
             return false;

@@ -6,7 +6,24 @@ import type { Language } from "@/config/personalities";
  * Gratuit, illimité, mais seulement quand le PC est allumé : l'appelant prévoit
  * toujours le repli sur ElevenLabs.
  */
-const TIMEOUT_MS = 20000;
+const TIMEOUT_MS = 12000;
+/** Après un échec réseau, on considère le PC éteint pendant ce délai : les appels échouent tout de suite (repli immédiat). */
+const DOWN_FOR_MS = 60000;
+let pcDownUntil = 0;
+
+export function markPcDown() {
+  pcDownUntil = Date.now() + DOWN_FOR_MS;
+}
+
+export function markPcUp() {
+  pcDownUntil = 0;
+}
+
+export function pcLikelyDown() {
+  return Date.now() < pcDownUntil;
+}
+
+const DOWN_MESSAGE = "PC injoignable (éteint, en veille, ou Docker/Tailscale arrêtés).";
 
 export function pcAvailable() {
   return Boolean(process.env.PC_TTS_URL?.trim()) && Boolean(process.env.PC_TTS_TOKEN?.trim());
@@ -44,9 +61,15 @@ export async function pcHealth(timeoutMs = 6000): Promise<PcHealth> {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${pcBaseUrl()}/health`, { signal: controller.signal, cache: "no-store" });
-    if (!res.ok) return { ok: false, error: `Le PC a répondu ${res.status}.` };
-    return (await res.json()) as PcHealth;
+    if (!res.ok) {
+      markPcDown();
+      return { ok: false, error: `Le PC a répondu ${res.status}.` };
+    }
+    const health = (await res.json()) as PcHealth;
+    if (health.ok) markPcUp();
+    return health;
   } catch (error) {
+    markPcDown();
     return { ok: false, error: error instanceof Error && error.name === "AbortError" ? "Le PC ne répond pas (éteint, ou tunnel Tailscale arrêté)." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}` };
   } finally {
     clearTimeout(timer);
@@ -56,6 +79,7 @@ export async function pcHealth(timeoutMs = 6000): Promise<PcHealth> {
 /** Transcription par Whisper sur le PC (même serveur que la voix). */
 export async function pcTranscribe(audio: Blob, language: Language): Promise<{ text: string; words: { text: string; start: number; end: number }[]; durationMs: number | null }> {
   if (!pcAvailable()) throw new Error("Oreille du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
+  if (pcLikelyDown()) throw new Error(DOWN_MESSAGE);
   const form = new FormData();
   form.append("audio", audio, "parole.wav");
   form.append("language", language);
@@ -65,6 +89,7 @@ export async function pcTranscribe(audio: Blob, language: Language): Promise<{ t
   try {
     res = await fetch(`${pcBaseUrl()}/stt`, { method: "POST", headers: { Authorization: `Bearer ${process.env.PC_TTS_TOKEN!.trim()}` }, body: form, signal: controller.signal });
   } catch (error) {
+    markPcDown();
     throw new Error(error instanceof Error && error.name === "AbortError" ? "Le PC met trop de temps à transcrire." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     clearTimeout(timer);
@@ -83,6 +108,7 @@ export async function pcTranscribe(audio: Blob, language: Language): Promise<{ t
 
 export async function pcSpeak(options: { text: string; language: Language; voice: string }): Promise<{ wav: Buffer; generationMs: number | null }> {
   if (!pcAvailable()) throw new Error("Voix du PC non configurée (PC_TTS_URL et PC_TTS_TOKEN).");
+  if (pcLikelyDown()) throw new Error(DOWN_MESSAGE);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let res: Response;
@@ -94,6 +120,7 @@ export async function pcSpeak(options: { text: string; language: Language; voice
       signal: controller.signal,
     });
   } catch (error) {
+    markPcDown();
     throw new Error(error instanceof Error && error.name === "AbortError" ? "Le PC met trop de temps à répondre." : `PC injoignable : ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     clearTimeout(timer);
