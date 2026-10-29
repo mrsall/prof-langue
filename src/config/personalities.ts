@@ -62,7 +62,7 @@ export const PERSONALITIES: Personality[] = [
       fr: [
         "Salut Cherif ! Content de te voir. Alors, {topic} : raconte-moi tout !",
         "Yo Cherif ! Ça va ? Je voulais justement te parler de {topic}.",
-        "Hey ! On parle de {topic} ? Vas-y, je t'écoute.",
+        "Hé ! On parle de {topic} ? Vas-y, je t'écoute.",
       ],
     },
     ownTopicMessages: {
@@ -84,7 +84,7 @@ export const PERSONALITIES: Personality[] = [
     avatar: { shirt: "#1f8a70", skin: "#5a3a22", hair: "short", beard: true, accessory: "none", accent: "#ffa05c" },
     firstMessages: {
       en: [
-        "Hey little brother, good to hear from you. I wanted to talk with you about {topic}. How are things?",
+        "Hey little brother, good to hear from you. I wanted to talk to you about {topic}. How are things?",
         "Cherif! Come, sit down. Let's talk about {topic}. What's on your mind?",
       ],
       fr: [
@@ -152,7 +152,7 @@ CHERIF doit parler la plupart du temps : pousse-le à trois phrases par argument
     avatar: { shirt: "#3b82f6", skin: "#8d5524", hair: "long", beard: false, accessory: "glasses", accent: "#f3f4fa" },
     firstMessages: {
       en: [
-        "Hello Cherif, nice to see you again. Today we practise: {topic}. Take your time, and let's start with a simple sentence.",
+        "Hello Cherif, nice to see you again. Today we're working on {topic}. Take your time, and let's start with a simple sentence.",
         "Hi Cherif! Ready? Our topic today is {topic}. Tell me the first thing that comes to your mind.",
       ],
       fr: [
@@ -161,7 +161,7 @@ CHERIF doit parler la plupart du temps : pousse-le à trois phrases par argument
       ],
     },
     ownTopicMessages: {
-      en: "Hello Cherif, nice to see you again. What would you like to practise today? Tell me in your own words.",
+      en: "Hello Cherif, nice to see you again. What would you like to work on today? Tell me in your own words.",
       fr: "Bonjour Cherif, contente de te revoir. Qu'est-ce que tu aimerais travailler aujourd'hui ? Dis-le-moi avec tes mots.",
     },
     character: {
@@ -179,7 +179,7 @@ CHERIF doit parler la plupart du temps : pousse-le à trois phrases par argument
     avatar: { shirt: "#e4e6f5", skin: "#f1c27d", hair: "short", beard: false, accessory: "tie", accent: "#5b5bff" },
     firstMessages: {
       en: [
-        "Morning Cherif. Thanks for taking the time. I'd like to go over {topic} with you. Shall we start?",
+        "Good morning, Cherif. Thanks for taking the time. I'd like to go over {topic} with you. Shall we start?",
         "Hi Cherif, good to connect. On the agenda today: {topic}. Where would you like to begin?",
       ],
       fr: [
@@ -188,7 +188,7 @@ CHERIF doit parler la plupart du temps : pousse-le à trois phrases par argument
       ],
     },
     ownTopicMessages: {
-      en: "Morning Cherif. Thanks for taking the time. What would you like to discuss today?",
+      en: "Good morning, Cherif. Thanks for taking the time. What would you like to discuss today?",
       fr: "Bonjour Cherif. Merci de prendre le temps. De quoi souhaitez-vous parler aujourd'hui ?",
     },
     character: {
@@ -209,7 +209,7 @@ CHERIF doit parler la plupart du temps : pousse-le à trois phrases par argument
       fr: ["On joue la scène : {topic}. Je commence. ... Bonjour, je peux vous aider ?"],
     },
     ownTopicMessages: {
-      en: "Let's play a scene. Tell me the situation you want to practise, and who I should be.",
+      en: "Let's play a scene. Tell me the situation you want to practice, and who I should be.",
       fr: "On joue une scène. Dis-moi la situation que tu veux travailler, et qui je dois être.",
     },
     character: {
@@ -234,7 +234,14 @@ export function isLanguage(v: unknown): v is Language {
 export const LANGUAGE_LABELS: Record<Language, string> = { en: "Anglais", fr: "Français" };
 
 export function fillTemplate(template: string, vars: Record<string, string>) {
-  return template.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? "");
+  return template.replace(/(^|[^\n])?\{(\w+)\}/g, (_, before: string | undefined, key: string) => {
+    const value = vars[key] ?? "";
+    // Un sujet inséré au milieu d'une phrase (« Let's talk about {topic} ») perd sa majuscule
+    // initiale, sauf s'il commence par un sigle ou un nom propre (deuxième lettre en majuscule).
+    const midSentence = before != null && before !== "" && !/[:.!?\n]/.test(before) && /\s/.test(before);
+    const fixed = midSentence && key === "topic" && /^[A-ZÀ-Ý][a-zà-ÿ]/.test(value) ? value[0].toLowerCase() + value.slice(1) : value;
+    return `${before ?? ""}${fixed}`;
+  });
 }
 
 export function pickFirstMessage(p: Personality, language: Language, topic: string, seed = Math.random()) {
