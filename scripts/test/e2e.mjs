@@ -424,7 +424,7 @@ try {
     await page.getByRole("radiogroup", { name: "Objectif quotidien" }).waitFor({ timeout: 20000 });
     if (await page.getByText(/DATABASE_URL|SQL de secours|Tailscale/).count()) throw new Error("réglages : des détails techniques (hôte de la base, SQL, Tailscale) sont encore affichés");
     await page.goto(`${BASE}/admin`);
-    await page.getByText("Base de données").waitFor({ timeout: 20000 });
+    await page.getByRole("heading", { name: "Base de données" }).waitFor({ timeout: 20000 });
     await page.waitForTimeout(1500);
     const badge = await page.locator("section", { hasText: "Base de données" }).first().textContent();
     if (process.env.DATABASE_URL && !/Base OK/.test(badge ?? "")) throw new Error(`admin : base pas « OK » (${(badge ?? "").slice(0, 120)})`);
@@ -668,6 +668,9 @@ try {
     await noBlockingError();
   });
   await step("Écrire au clavier (mode éco) → la phrase entre dans le texte et Max répond", async () => {
+    // On laisse la réponse lente précédente se terminer (sinon le brouillon fausse le compte).
+    await page.waitForFunction((sel) => !document.querySelector(`${sel}.opacity-70`), transcript, { timeout: 15000 });
+    await page.waitForTimeout(500);
     const before = await countBubbles("après le café");
     await page.getByRole("button", { name: "Écrire au clavier" }).click();
     await page.getByLabel("Écrire au clavier").fill("J'ai bu un thé ce matin");
