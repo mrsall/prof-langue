@@ -15,6 +15,9 @@ const stats = {};
 const count = (key) => (stats[key] = (stats[key] ?? 0) + 1);
 /** PC « éteint » (POST /__pc {down:true}) : plus de voix, d'oreille ni de temps réel. */
 let pcDown = false;
+/** Crédit ElevenLabs épuisé (POST /__eleven {quota:true}) : la lecture répond 401 quota_exceeded. */
+let elevenQuota = false;
+const ELEVEN_LIMIT = 121452;
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -126,6 +129,13 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { down: pcDown });
   }
   if (pcDown && path.startsWith("/pc/")) return json(res, 503, { detail: "PC éteint (simulation)" });
+  if (req.method === "POST" && path === "/__eleven") {
+    elevenQuota = Boolean(JSON.parse(raw.toString("utf8") || "{}").quota);
+    return json(res, 200, { quota: elevenQuota });
+  }
+  if (req.method === "GET" && path === "/v1/user/subscription") {
+    return json(res, 200, { tier: "creator", character_count: elevenQuota ? ELEVEN_LIMIT : 40210, character_limit: ELEVEN_LIMIT, next_character_count_reset_unix: Math.floor(Date.now() / 1000) + 12 * 86400 });
+  }
   if (req.method === "POST" && path === "/__reset") {
     for (const k of Object.keys(stats)) delete stats[k];
     return json(res, 200, { ok: true });
@@ -232,6 +242,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && path.startsWith("/v1/voices/add/")) return json(res, 200, { voice_id: "frnew" });
   if (req.method === "POST" && /^\/v1\/voices\/[^/]+\/edit$/.test(path)) return json(res, 200, { status: "ok" });
   if (req.method === "POST" && path.startsWith("/v1/text-to-speech/")) {
+    if (elevenQuota) return json(res, 401, { detail: { status: "quota_exceeded", message: `You have 0 credits remaining (quota ${ELEVEN_LIMIT})` } });
     const wav = silentWav();
     res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": String(wav.length) });
     return res.end(wav);

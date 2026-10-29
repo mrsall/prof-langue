@@ -242,8 +242,10 @@ try {
     if (!res.ok() || !(res.headers()["content-type"] ?? "").startsWith("audio/wav")) throw new Error(`tts pc : HTTP ${res.status()} ${res.headers()["content-type"]}`);
     const diag = await (await page.request.get(`${BASE}/api/diagnostic/pc`)).json();
     if (!diag.ok || !/4070/.test(diag.gpu ?? "")) throw new Error(JSON.stringify(diag).slice(0, 200));
+    // PC en panne : le serveur enchaîne lui-même sur ElevenLabs et le dit dans l'en-tête.
     const down = await page.request.get(`${BASE}/api/tts?text=PANNE&lang=fr&personality=prof&engine=pc`);
-    if (down.ok()) throw new Error("un PC en panne devrait répondre une erreur (le téléphone bascule alors sur ElevenLabs)");
+    if (!down.ok() || down.headers()["x-voice-engine"] !== "eleven") throw new Error(`PC en panne : HTTP ${down.status()}, moteur ${down.headers()["x-voice-engine"]} (attendu eleven)`);
+    if (!/PC/.test(decodeURIComponent(down.headers()["x-voice-fallback"] ?? ""))) throw new Error(`raison du repli : ${down.headers()["x-voice-fallback"]}`);
   });
   await step("Diagnostic Claude : réponse avec du texte (le faux Claude rend une réponse vide si le plafond est trop bas)", async () => {
     const res = await page.request.get(`${BASE}/api/diagnostic/claude`);
@@ -638,6 +640,95 @@ try {
     const users = await countBubbles("mangé du riz");
     if (users !== 1) throw new Error(`prise de parole comptée ${users} fois`);
     await noBlockingError();
+  });
+  await page.context().close();
+
+  // ------------------------------------------------------------------ Crédit ElevenLabs épuisé : chaîne de secours
+  page = await newPage(browser, { "prof-langue:engine": "eco", "prof-langue:voice-choice": "eleven", "prof-langue:language": "fr", "prof-langue:mode": "ami" });
+  console.log("Crédit ElevenLabs épuisé (quota_exceeded simulé)");
+  await step("Quota : /api/elevenlabs/quota lit les vrais crédits et l'accueil prévient", async () => {
+    await page.request.post(`${MOCK}/__eleven`, { data: { quota: true } });
+    const q = await (await page.request.get(`${BASE}/api/elevenlabs/quota?force=1`)).json();
+    if (!q.exhausted || q.used !== q.limit || q.pct !== 100) throw new Error(`quota : ${JSON.stringify(q)}`);
+    await page.goto(`${BASE}/`);
+    await page.getByText(/Crédit ElevenLabs épuisé/).first().waitFor({ timeout: 15000 });
+  });
+  await step("/api/tts demandé à ElevenLabs → le PC parle (X-Voice-Engine: pc) en moins de 5 s", async () => {
+    const t0 = Date.now();
+    const res = await page.request.get(`${BASE}/api/tts?text=Hello&lang=en&engine=eleven&personality=ami`);
+    const ms = Date.now() - t0;
+    if (!res.ok()) throw new Error(`HTTP ${res.status()} ${(await res.text()).slice(0, 200)}`);
+    if (res.headers()["x-voice-engine"] !== "pc") throw new Error(`moteur : ${res.headers()["x-voice-engine"]}`);
+    if (!/cr%C3%A9dit%20ElevenLabs|crédit ElevenLabs/.test(decodeURIComponent(res.headers()["x-voice-fallback"] ?? ""))) throw new Error(`raison : ${res.headers()["x-voice-fallback"]}`);
+    if (ms > 5000) throw new Error(`trop lent : ${ms} ms`);
+  });
+  await step("Séance éco, voix ElevenLabs choisie → bandeau « Voix de secours : ton PC · crédit ElevenLabs épuisé »", async () => {
+    await mockStats(true);
+    await startSession("fr", "Max");
+    await page.waitForSelector(transcript, { timeout: 25000 });
+    await page.getByText(/Voix de secours : ton PC/).waitFor({ timeout: 20000 });
+    const stats = await mockStats();
+    if (!(stats["/pc/tts"] >= 1)) throw new Error(`le PC n'a pas été sollicité : ${JSON.stringify(stats)}`);
+    if (stats.tts > 1) throw new Error(`ElevenLabs encore sollicité ${stats.tts} fois malgré le quota mémorisé`);
+    await noBlockingError();
+  });
+  await step("PC éteint en plus → la voix du téléphone prend le relais, sans erreur bloquante, et le bandeau le dit", async () => {
+    await page.request.post(`${MOCK}/__pc`, { data: { down: true } });
+    try {
+      await page.evaluate(() => {
+        window.__nextSpeech = "hier j'ai regardé un match";
+      });
+      await waitBubble("après le café", 25000);
+      await page.getByText(/Voix de secours : le téléphone/).waitFor({ timeout: 20000 });
+      await noBlockingError();
+      const res = await page.request.get(`${BASE}/api/tts?text=Hello&lang=en&engine=eleven&personality=ami`);
+      if (res.status() !== 502) throw new Error(`HTTP ${res.status()} attendu 502`);
+      const body = await res.json();
+      if (!/ElevenLabs/.test(body.error) || !/PC|ton PC/.test(body.error)) throw new Error(`l'erreur doit nommer chaque moteur : ${body.error}`);
+    } finally {
+      await page.request.post(`${MOCK}/__pc`, { data: { down: false } });
+    }
+  });
+  await step("Crédit rechargé → le quota relu efface la mémoire et ElevenLabs reparle", async () => {
+    await page.request.post(`${MOCK}/__eleven`, { data: { quota: false } });
+    const q = await (await page.request.get(`${BASE}/api/elevenlabs/quota?force=1`)).json();
+    if (q.exhausted) throw new Error(`toujours épuisé : ${JSON.stringify(q)}`);
+    const res = await page.request.get(`${BASE}/api/tts?text=Hello&lang=en&engine=eleven&personality=ami`);
+    if (!res.ok() || res.headers()["x-voice-engine"] !== "eleven") throw new Error(`moteur : ${res.status()} ${res.headers()["x-voice-engine"]}`);
+    await page.getByRole("button", { name: "Terminer" }).click();
+    await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
+  });
+  await page.context().close();
+
+} finally {
+      await sql.end();
+    }
+  };
+  await step("Sans cookie : les routes /api répondent 401 et les pages renvoient vers /acces", async () => {
+    await cleanAttempts();
+    const api = await page.request.get(`${BASE}/api/reglages`);
+    if (api.status() !== 401) throw new Error(`/api/reglages sans cookie : HTTP ${api.status()}`);
+    await page.goto(`${BASE}/suivi`);
+    await page.waitForURL(/\/acces/, { timeout: 15000 });
+  });
+  await step("5 codes faux → 401 avec le compte des essais restants, le 6e → 429, et le bon code est refusé aussi", async () => {
+    for (let i = 1; i <= 5; i++) {
+      const res = await page.request.post(`${BASE}/api/acces`, { data: { code: `000${i}` } });
+      if (res.status() !== 401) throw new Error(`essai ${i} : HTTP ${res.status()} attendu 401`);
+    }
+    const sixth = await page.request.post(`${BASE}/api/acces`, { data: { code: "0006" } });
+    if (sixth.status() !== 429) throw new Error(`6e essai : HTTP ${sixth.status()} attendu 429`);
+    const body = await sixth.json();
+    if (!/Trop d'essais/.test(body.error) || !(body.retryAfterMinutes >= 1)) throw new Error(`réponse 429 : ${JSON.stringify(body)}`);
+    const good = await page.request.post(`${BASE}/api/acces`, { data: { code: APP_PIN } });
+    if (good.status() !== 429) throw new Error(`bon code pendant le blocage : HTTP ${good.status()} attendu 429`);
+  });
+  await step("La page /acces affiche le blocage", async () => {
+    await page.goto(`${BASE}/acces`);
+    await page.getByLabel("Code").fill("1111");
+    await page.getByRole("button", { name: "Entrer" }).click();
+    await page.getByText(/Trop d'essais/).waitFor({ timeout: 15000 });
+    await cleanAttempts();
   });
   await page.context().close();
 } finally {

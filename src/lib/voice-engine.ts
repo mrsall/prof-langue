@@ -2,7 +2,7 @@
 
 import type { Language } from "@/config/personalities";
 import { kokoroVoiceFor } from "@/config/kokoro-voices";
-import { loadKokoro, splitSentences, synthesize, type KokoroProgress } from "@/lib/kokoro";
+import { kokoroLoaded, loadKokoro, splitSentences, synthesize, type KokoroProgress } from "@/lib/kokoro";
 import { speakText, speechSynthesisAvailable, splitVoiceSegments, type SpeakHandle } from "@/lib/speech";
 
 /**
@@ -37,6 +37,17 @@ export type PreparedClip = {
   play: (onStart?: () => void) => SpeakHandle;
   /** À appeler si on ne le jouera finalement pas (libère les fichiers audio). */
   dispose: () => void;
+};
+
+/** Une voix de secours a pris la parole : `engine` = qui parle vraiment, `reason` = pourquoi (« crédit ElevenLabs épuisé »…). */
+export type VoiceFallback = { engine: VoiceChoice; reason: string };
+
+export const VOICE_LABELS: Record<VoiceChoice, string> = {
+  eleven: "ElevenLabs",
+  gemini: "Google",
+  pc: "ton PC",
+  kokoro: "Kokoro",
+  phone: "le téléphone",
 };
 
 export type Speaker = {
@@ -209,9 +220,33 @@ function phoneSpeaker(language: Language): Speaker {
   };
 }
 
-/** Voix fabriquée par le serveur (/api/tts) : ElevenLabs, ou Google / le PC de Cherif avec repli ElevenLabs. */
-function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, personalityId: string | null): Speaker {
-  const fallback = speechSynthesisAvailable() ? phoneSpeaker(language) : null;
+/**
+ * Voix fabriquée par le serveur (/api/tts). Le serveur applique lui-même la chaîne
+ * de secours (moteur demandé → ElevenLabs → PC, 4 s par moteur) et dit qui a parlé
+ * (`X-Voice-Engine`). S'il n'a aucune voix, le téléphone enchaîne : Kokoro s'il est
+ * déjà chargé (anglais), sinon la voix de synthèse du téléphone. Chaque bascule est
+ * annoncée une fois par `onFallback` pour afficher un bandeau « Voix de secours ».
+ */
+function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, personalityId: string | null, onFallback?: (info: VoiceFallback) => void): Speaker {
+  let announced: VoiceChoice | null = null;
+  const announce = (actual: VoiceChoice, reason: string) => {
+    if (actual === engine || actual === announced) return;
+    announced = actual;
+    console.warn(`Voix de secours : ${VOICE_LABELS[actual]} (${reason})`);
+    onFallback?.({ engine: actual, reason });
+  };
+  /** Voix locale de secours : Kokoro déjà chargé (anglais), sinon le téléphone. */
+  const localFallback = (): Speaker | null => {
+    if (language === "en" && kokoroLoaded()) return kokoroSpeaker(personalityId);
+    return speechSynthesisAvailable() ? phoneSpeaker(language) : null;
+  };
+  class ServerVoiceError extends Error {
+    reason: string;
+    constructor(message: string, reason: string) {
+      super(message);
+      this.reason = reason;
+    }
+  }
   const fetchPart = async (seg: { text: string; alt?: boolean }, rate: number) => {
     const q = new URLSearchParams({
       text: seg.text,
@@ -221,16 +256,14 @@ function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, p
       role: seg.alt ? "judge" : "main",
       engine,
     });
-    let res = await fetch(`/api/tts?${q.toString()}`);
-    if (!res.ok && engine !== "eleven") {
-      // Voix Google ou PC indisponible (clé absente, quota, PC éteint) : ElevenLabs lit cette réplique.
-      console.warn(engine === "pc" ? "Voix du PC indisponible, repli ElevenLabs" : "Voix Google indisponible, repli ElevenLabs");
-      q.set("engine", "eleven");
-      res = await fetch(`/api/tts?${q.toString()}`);
-    }
+    const res = await fetch(`/api/tts?${q.toString()}`);
     if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(data.error ?? `Voix indisponible (${res.status}).`);
+      const data = (await res.json().catch(() => ({}))) as { error?: string; reason?: string | null };
+      throw new ServerVoiceError(data.error ?? `Voix indisponible (${res.status}).`, data.reason ?? "aucune voix serveur ne répond");
+    }
+    const actual = res.headers.get("x-voice-engine");
+    if (actual && actual !== engine && (actual === "eleven" || actual === "pc" || actual === "gemini")) {
+      announce(actual, decodeURIComponent(res.headers.get("x-voice-fallback") ?? "") || `${VOICE_LABELS[engine]} indisponible`);
     }
     return URL.createObjectURL(await res.blob());
   };
@@ -259,10 +292,11 @@ function serverSpeaker(engine: "eleven" | "gemini" | "pc", language: Language, p
             const result = await jobs[i];
             if (cancelled) return dropFrom(i);
             if ("error" in result) {
-              // ElevenLabs injoignable : la voix du téléphone prend le relais pour ce qui reste à dire.
-              console.warn("Voix ElevenLabs indisponible, repli sur la voix du téléphone :", result.error instanceof Error ? result.error.message : result.error);
+              // Aucune voix serveur : Kokoro (s'il est chargé) ou le téléphone prend le relais pour ce qui reste à dire.
               dropFrom(i + 1);
+              const fallback = localFallback();
               if (!fallback) throw result.error;
+              announce(fallback.choice, result.error instanceof ServerVoiceError ? result.error.reason : "aucune voix serveur ne répond");
               inner = fallback.speak(
                 segments
                   .slice(i)
@@ -349,10 +383,10 @@ function kokoroSpeaker(personalityId: string | null): Speaker {
   };
 }
 
-export function createSpeaker(choice: VoiceChoice, options: { language: Language; personalityId?: string | null }): Speaker {
+export function createSpeaker(choice: VoiceChoice, options: { language: Language; personalityId?: string | null; onFallback?: (info: VoiceFallback) => void }): Speaker {
   const personalityId = options.personalityId ?? null;
   if (choice === "phone") return phoneSpeaker(options.language);
   if (choice === "kokoro" && options.language === "en") return kokoroSpeaker(personalityId);
-  if (choice === "gemini" || choice === "pc") return serverSpeaker(choice, options.language, personalityId);
-  return serverSpeaker("eleven", options.language, personalityId);
+  if (choice === "gemini" || choice === "pc") return serverSpeaker(choice, options.language, personalityId, options.onFallback);
+  return serverSpeaker("eleven", options.language, personalityId, options.onFallback);
 }
