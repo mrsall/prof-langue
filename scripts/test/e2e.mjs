@@ -570,6 +570,13 @@ try {
     if (!(stats["/pc/live"] >= 1)) throw new Error(`pas de connexion WebSocket au PC : ${JSON.stringify(stats)}`);
     await noBlockingError();
   });
+  await step("Écrire au clavier (temps réel) → le PC reçoit le texte et répond", async () => {
+    await page.getByRole("button", { name: "Écrire au clavier" }).click();
+    await page.getByLabel("Écrire au clavier").fill("ensuite j'ai lu un livre");
+    await page.getByRole("button", { name: "Envoyer" }).click();
+    await waitBubble("ensuite j'ai lu un livre", 15000);
+    await noBlockingError();
+  });
   await step("PC éteint → la séance temps réel bascule toute seule en mode éco", async () => {
     await page.getByRole("button", { name: "Terminer" }).click();
     await page.getByText(/À retenir|Texte de la séance|C'était rapide/).first().waitFor({ timeout: 30000 });
@@ -658,6 +665,15 @@ try {
     await page.waitForFunction(([sel, t, n]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length > n, [transcript, "après le café", before], { timeout: 20000 });
     const users = await countBubbles("mangé du riz");
     if (users !== 1) throw new Error(`prise de parole comptée ${users} fois`);
+    await noBlockingError();
+  });
+  await step("Écrire au clavier (mode éco) → la phrase entre dans le texte et Max répond", async () => {
+    const before = await countBubbles("après le café");
+    await page.getByRole("button", { name: "Écrire au clavier" }).click();
+    await page.getByLabel("Écrire au clavier").fill("J'ai bu un thé ce matin");
+    await page.getByRole("button", { name: "Envoyer" }).click();
+    await waitBubble("J'ai bu un thé ce matin", 10000);
+    await page.waitForFunction(([sel, t, n]) => Array.from(document.querySelectorAll(sel)).filter((p) => (p.textContent || "").toLowerCase().includes(t)).length > n, [transcript, "après le café", before], { timeout: 20000 });
     await noBlockingError();
   });
   await page.context().close();

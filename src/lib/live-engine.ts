@@ -267,6 +267,15 @@ export class LiveEngine {
     this.send({ type: "repeat" });
   }
 
+  /** Cherif écrit au lieu de parler : le PC traite le texte comme une phrase entendue. */
+  sendText(text: string): boolean {
+    const clean = text.trim();
+    if (!clean || this.ended || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this.stopPlayback();
+    this.send({ type: "text", text: clean });
+    return true;
+  }
+
   setRate(rate: number) {
     this.rate = rate;
   }

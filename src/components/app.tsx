@@ -963,6 +963,29 @@ function AppInner() {
     sendUserMessage(REPEAT_COMMAND[live.language]);
   }, [connected, live, sendUserMessage]);
 
+  // Saisie au clavier en séance (lieu public, micro qui ne comprend pas).
+  const [typing, setTyping] = useState(false);
+  const [typed, setTyped] = useState("");
+  const sendTyped = useCallback(() => {
+    const text = typed.trim();
+    if (!connected || !text) return;
+    const eco = ecoRef.current;
+    if (eco) {
+      // Moteurs éco et temps réel : le texte suit le même chemin qu'une phrase entendue (le moteur l'affiche lui-même).
+      if (!eco.sendText(text)) {
+        showToast("Le personnage prépare sa réponse : réessaie dans un instant.");
+        return;
+      }
+    } else {
+      // ElevenLabs : on l'affiche nous-mêmes et on ignore l'écho éventuel de l'agent.
+      userTurns.current += 1;
+      pushLine("user", text);
+      pendingCommand.current = text;
+      sendUserMessage(text);
+    }
+    setTyped("");
+  }, [typed, connected, showToast, pushLine, sendUserMessage]);
+
   const cycleSpeed = useCallback(() => {
     const current = liveRef.current?.speed ?? speed;
     const next =
@@ -1591,19 +1614,59 @@ function AppInner() {
           onHoldChange={onHoldChange}
         />
       )}
-      <button
-        type="button"
-        onClick={() => {
-          setSavedTalkMode(handsFree ? "appui" : "mains-libres");
-          setHolding(false);
-          setMuted(false);
-        }}
-        className="mx-auto text-xs text-muted underline"
-      >
-        {handsFree
-          ? "Passer en appui pour parler (endroit bruyant)"
-          : "Passer en mains libres"}
-      </button>
+      <div className="flex items-center justify-center gap-4">
+        <button
+          type="button"
+          onClick={() => {
+            setSavedTalkMode(handsFree ? "appui" : "mains-libres");
+            setHolding(false);
+            setMuted(false);
+          }}
+          className="min-h-11 text-xs text-muted underline"
+        >
+          {handsFree
+            ? "Passer en appui pour parler (endroit bruyant)"
+            : "Passer en mains libres"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTyping((t) => !t)}
+          aria-expanded={typing}
+          className="min-h-11 text-xs text-muted underline"
+        >
+          {typing ? "Masquer le clavier" : "Écrire au clavier"}
+        </button>
+      </div>
+      {typing && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            sendTyped();
+          }}
+        >
+          <input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={
+              p.language === "en"
+                ? "Write what you'd say…"
+                : "Écris ce que tu dirais…"
+            }
+            aria-label="Écrire au clavier"
+            autoComplete="off"
+            enterKeyHint="send"
+            className="h-12 min-w-0 flex-1 rounded-xl border border-line bg-elevated px-3 text-base text-fg"
+          />
+          <button
+            type="submit"
+            disabled={!connected || !typed.trim()}
+            className="h-12 shrink-0 rounded-xl bg-accent px-4 text-sm font-bold text-accent-contrast disabled:opacity-60"
+          >
+            Envoyer
+          </button>
+        </form>
+      )}
     </main>
   );
 }

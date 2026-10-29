@@ -200,6 +200,17 @@ export class EcoEngine {
     if (!this.muted) void this.listen();
   }
 
+  /** Cherif écrit au lieu de parler (lieu public, micro qui ne comprend pas) : même chemin qu'une phrase entendue. */
+  sendText(text: string): boolean {
+    const clean = text.trim();
+    if (!clean || this.ended) return false;
+    if (this.mode === "thinking" && !this.speaking) return false;
+    this.stopSpeaking();
+    this.cancelListening();
+    void this.handleUser(clean);
+    return true;
+  }
+
   /** Relit la dernière réplique (un peu plus lentement), sans la rajouter au texte de la séance. */
   repeatLast() {
     if (!this.lastAgentText || this.ended || this.mode === "thinking") return;

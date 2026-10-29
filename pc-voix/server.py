@@ -480,6 +480,16 @@ class LiveSession:
         elif kind == "repeat":
             if self.last_agent_text and (self.respond_task is None or self.respond_task.done()):
                 self.respond_task = asyncio.create_task(self.speak_text(self.last_agent_text, record=False))
+        elif kind == "text":
+            # Saisie au clavier : même chemin qu'une phrase transcrite.
+            text = str(cmd.get("text") or "").strip()[:600]
+            if len(text) >= 2:
+                self.in_speech = False
+                self.utter = []
+                self.cancel_response()
+                await self.send({"type": "user", "text": text})
+                self.history.append({"role": "user", "text": text})
+                self.respond_task = asyncio.create_task(self.respond())
         elif kind == "end":
             self.closed = True
             await self.ws.close()

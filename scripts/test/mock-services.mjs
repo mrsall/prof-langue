@@ -318,6 +318,8 @@ server.on("upgrade", (req, socket, head) => {
           void speak("Et après le café, qu'est-ce que tu as fait ?");
         } else if (cmd.type === "flush") {
           if (loud >= 2 && !responding) void reply("hier j'ai bu mon café");
+        } else if (cmd.type === "text") {
+          if (!responding) void reply(String(cmd.text ?? ""));
         } else if (cmd.type === "end") {
           ws.close();
         }
