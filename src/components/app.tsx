@@ -2821,7 +2821,7 @@ function BilanScreen({
             </section>
           )}
           {kind !== "test" && !notCounted && (
-            <section className="flex flex-1 flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
+            <section className="flex flex-col gap-2 rounded-2xl border border-line bg-elevated p-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold">Mots du jour</span>
                 {bilan && bilan.words.length > 0 && (
@@ -2852,10 +2852,14 @@ function BilanScreen({
                   Pas assez de discussion pour relever des mots cette fois.
                 </p>
               )}
-              {costFcfa != null && (
-                <p className="mt-auto pt-2 text-xs text-muted">
-                  Mots ajoutés au carnet. Coût estimé de la séance : ≈{" "}
-                  {costFcfa} FCFA.
+              {(costFcfa != null || (bilan && bilan.words.length > 0)) && (
+                <p className="pt-1 text-xs text-muted">
+                  {bilan && bilan.words.length > 0
+                    ? "Mots ajoutés au carnet. "
+                    : ""}
+                  {costFcfa != null
+                    ? `Coût estimé de la séance : ≈ ${costFcfa} FCFA.`
+                    : ""}
                 </p>
               )}
             </section>
