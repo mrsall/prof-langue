@@ -1,5 +1,6 @@
 "use client";
 
+import { stripVoiceTags } from "@/lib/text";
 import type { Language } from "@/config/personalities";
 import type { TranscriptLine } from "@/lib/prompt";
 import { startWavRecorder, type WavRecorder } from "@/lib/recorder";
@@ -255,7 +256,7 @@ export class EcoEngine {
     if (record) {
       this.history.push({ role: "agent", text });
       // Les balises <voice> servent à la voix, pas à l'affichage.
-      this.options.callbacks.onMessage({ role: "agent", message: text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
+      this.options.callbacks.onMessage({ role: "agent", message: stripVoiceTags(text) });
     }
     // Tant que la voix se fabrique (ElevenLabs, Google), le personnage « réfléchit » ; il « parle » au premier son.
     this.setMode("thinking");
@@ -373,7 +374,7 @@ export class EcoEngine {
         if (said) {
           this.lastAgentText = said;
           this.history.push({ role: "agent", text: said });
-          cb.onMessage({ role: "agent", message: said.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim() });
+          cb.onMessage({ role: "agent", message: stripVoiceTags(said) });
         }
       },
     };
@@ -391,7 +392,7 @@ export class EcoEngine {
       if (this.turn !== turn) return;
       this.turn = null;
       cb.onDraft?.(null);
-      const clean = text.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim();
+      const clean = stripVoiceTags(text);
       if (clean) {
         this.lastAgentText = text;
         this.history.push({ role: "agent", text });
@@ -488,7 +489,7 @@ export class EcoEngine {
             const event = JSON.parse(line) as { type: string; text?: string; message?: string; fatal?: boolean; fallback?: boolean; reason?: string };
             if (event.type === "delta" && event.text) {
               full += event.text;
-              cb.onDraft?.(full.replace(/<\/?voice[^>]*>/gi, "").replace(/\s+/g, " ").trim());
+              cb.onDraft?.(stripVoiceTags(full));
               for (const s of buffer.push(event.text)) pushSentence(s);
             } else if (event.type === "done") {
               if (event.text) full = event.text;

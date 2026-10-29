@@ -48,6 +48,7 @@ import { randomTopic } from "@/config/topics";
 import { usableForShadowing } from "@/config/shadowing";
 import { useLocalStorage } from "@/lib/use-local-storage";
 import { useProgress, useToday } from "@/lib/progress";
+import { stripVoiceTags } from "@/lib/text";
 import { useHistory } from "@/lib/history";
 import type { BilanResult } from "@/app/api/bilan/route";
 import type { Progression } from "@/app/api/sessions/route";
@@ -272,10 +273,7 @@ function AppInner() {
   }, [refreshRemote]);
 
   const pushLine = useCallback((role: "user" | "agent", raw: string) => {
-    const text = raw
-      .replace(/<\/?voice[^>]*>/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = stripVoiceTags(raw);
     if (!text) return;
     setTranscript((prev) => {
       const next = [...prev, { id: prev.length, role, text }];
@@ -1809,7 +1807,7 @@ function HomeScreen({
         month: "long",
       })
     : "";
-  const greeting = personality.ownTopicMessages[language];
+  const greeting = stripVoiceTags(personality.ownTopicMessages[language]);
   const pct = Math.min(100, Math.round((minutesToday / goalMinutes) * 100));
   const displayName =
     personality.id === "situation" ? personality.modeLabel : personality.name;
@@ -2434,7 +2432,9 @@ function BilanScreen({
       : tooShort
         ? "C'était rapide ! La prochaine fois, on discute un peu plus longtemps."
         : "Belle discussion, Cherif ! On remet ça demain ?";
-  const encouragement = bilan?.encouragement ?? fallbackEncouragement;
+  const encouragement = stripVoiceTags(
+    bilan?.encouragement ?? fallbackEncouragement,
+  );
   const showTeacher = Boolean(
     bilan?.suggestTeacher && bilan.teacherFocus && personality.id !== "prof",
   );
